@@ -4,375 +4,1306 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>POS - Papelería</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone@7.23.2/babel.min.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Versiones fijas: evita que una actualización de la librería rompa la app -->
+    <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    animation: {
+                        'fade-in-up': 'fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                        'pop-in': 'popIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+                        'slide-up': 'slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                    },
+                    keyframes: {
+                        fadeInUp: { '0%': { opacity: '0', transform: 'translateY(15px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+                        popIn: { '0%': { opacity: '0', transform: 'scale(0.95)' }, '100%': { opacity: '1', transform: 'scale(1)' } },
+                        slideUp: { '0%': { opacity: '0', transform: 'translateY(100%)' }, '100%': { opacity: '1', transform: 'translateY(0)' } }
+                    }
+                }
+            }
+        }
+    </script>
+
     <style>
-        body { background-color: #f4f4f5; }
+        body { background-color: #fafafa; -webkit-tap-highlight-color: transparent; color: #18181b; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .glass-nav { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
     </style>
 </head>
 <body>
-<div id="root"></div>
-<script type="text/babel" data-presets="react">
+    <div id="root"></div>
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwpF642MYoVTDop7iMkkrvmRZWQql7cOR6dBNwZC4mjh2F4nVF7frOBeImNaohm-DOmrg/exec";
+    <script type="text/babel">
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycby7eXbprdeQzkZZbaJJBnnEDLJ-g8BULGtQZHnZNM-XBdNLa20Plh-EflUT-aVNtL2wKA/exec";
 
-const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
 
-const fmt = n => `$${Number(n).toFixed(2)}`;
-const genFolio = () => `F-${Date.now().toString().slice(-6)}`;
+        // =====================================================================
+        //  UTILIDADES
+        // =====================================================================
+        const store = {
+            get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+            set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
+        };
+        function usePersisted(key, initial) {
+            const [v, setV] = useState(() => store.get(key, initial));
+            useEffect(() => { store.set(key, v); }, [key, v]);
+            return [v, setV];
+        }
+        const money = n => '$' + Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const sum = (arr, f) => arr.reduce((s, x) => s + (Number(f(x)) || 0), 0);
+        const monthKey = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+        const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        const monthLabel = key => { const [y, m] = key.split('-'); return `${MESES[Number(m) - 1]} ${y}`; };
+        const fmtDate = d => d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
+        const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+        const daysUntil = d => Math.ceil((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(new Date().toDateString())) / 86400000);
+        // Si el vencimiento cae en sábado o domingo, se recorre al siguiente día hábil (no contempla días festivos)
+        const nextBusinessDay = d => { const x = new Date(d); while (x.getDay() === 0 || x.getDay() === 6) x.setDate(x.getDate() + 1); return x; };
 
-function ProductCard({ item, cartQty, onAdd, onRemove }) {
-    const lowStock   = item.stock > 0 && item.stock <= item.minimo;
-    const outOfStock = item.stock === 0;
-    return (
-        <div className={`bg-white rounded-xl border border-zinc-200 p-3 flex flex-col gap-2 select-none ${outOfStock ? 'opacity-50' : ''}`}>
-            <div className="flex items-start justify-between gap-1">
-                <div className="min-w-0">
-                    <p className="text-xs text-zinc-400">#{item.id}</p>
-                    <h3 className="font-medium text-zinc-900 text-sm leading-tight">{item.name}</h3>
+        // =====================================================================
+        //  PARÁMETROS FISCALES (referenciales; validar con contador cada año)
+        // =====================================================================
+        const REGIMENES = {
+            '626': 'RESICO – Régimen Simplificado de Confianza (626)',
+            '612': 'Actividades Empresariales y Profesionales (612)',
+            'none': 'Aún no estoy inscrito en el SAT'
+        };
+        // RESICO persona física: tasa mensual sobre ingresos cobrados sin IVA (art. 113-E LISR)
+        const RESICO_TRAMOS = [[25000, 1.00], [50000, 1.10], [83333.33, 1.50], [208333.33, 2.00], [3500000, 2.50]];
+        const RESICO_LIMITE_ANUAL = 3500000;
+        // Tarifa anual art. 152 LISR (vigente desde 2023): [límite inferior, cuota fija, % excedente]
+        const TARIFA_ANUAL = [
+            [0.01, 0, 1.92], [8952.50, 171.88, 6.40], [75984.56, 4461.94, 10.88], [133536.08, 10723.55, 16.00],
+            [155229.81, 14194.54, 17.92], [185852.58, 19682.13, 21.36], [374837.89, 60049.40, 23.52],
+            [590796.00, 110842.74, 30.00], [1127926.85, 271981.99, 32.00], [1503902.47, 392294.17, 34.00],
+            [4511707.38, 1414947.85, 35.00]
+        ];
+        const resicoTasa = baseMensual => { for (const [lim, t] of RESICO_TRAMOS) if (baseMensual <= lim) return t; return 2.5; };
+        // Tarifa acumulada para pagos provisionales: tarifa anual × (meses / 12)
+        const isrTarifaAcumulada = (base, meses) => {
+            if (base <= 0) return 0;
+            const f = meses / 12;
+            let row = TARIFA_ANUAL[0];
+            for (const r of TARIFA_ANUAL) if (base >= r[0] * f) row = r;
+            return row[1] * f + (base - row[0] * f) * row[2] / 100;
+        };
+
+        const CONFIG_DEFAULT = { regimen: '626', ivaDefault: 0.16, rfc: '', nombre: '', efirmaVence: '', periodicidadGlobal: 'mensual' };
+
+        // =====================================================================
+        //  CHECKLIST DE FORMALIZACIÓN (persona física con papelería)
+        // =====================================================================
+        const CHECKLIST = [
+            { grupo: 'SAT · Alta y régimen', icon: 'ph-identification-card', items: [
+                { id: 'rfc', t: 'RFC con la actividad económica correcta', d: 'Tu Constancia de Situación Fiscal debe mostrar "Comercio al por menor de artículos de papelería". Si das copias, impresiones o engargolados, agrega también esa actividad de servicios.' },
+                { id: 'regimen', t: 'Régimen fiscal elegido con criterio', d: 'Persona física con ingresos de hasta $3.5 M al año: RESICO (626) paga ISR de 1% a 2.5% sobre lo cobrado, sin deducciones. Actividades Empresariales (612) paga sobre utilidad y sí deduce gastos. Si tu margen es bajo y tienes muchos gastos con factura, el 612 puede convenir. Decídelo con un contador.' },
+                { id: 'efirma', t: 'e.firma vigente', d: 'Se tramita en oficina del SAT con cita. Dura 4 años: registra su fecha de vencimiento en Ajustes para que la app te avise.' },
+                { id: 'contrasena', t: 'Contraseña del SAT', d: 'Para entrar al portal, presentar declaraciones y facturar con la herramienta gratuita.' },
+                { id: 'buzon', t: 'Buzón tributario habilitado', d: 'Obligatorio. Registra y confirma correo y celular. Si no lo habilitas, el SAT puede multarte y notificarte por estrados sin que te enteres.' },
+                { id: 'domicilio', t: 'Domicilio fiscal correcto y aviso de apertura del local', d: 'Si la papelería está en un lugar distinto a tu domicilio fiscal, presenta el aviso de apertura de establecimiento.' },
+                { id: 'csf', t: 'Constancia de Situación Fiscal a la mano', d: 'La piden proveedores, bancos y clientes que te solicitan factura. Descárgala actualizada.' },
+            ]},
+            { grupo: 'SAT · Facturación (CFDI 4.0)', icon: 'ph-receipt', items: [
+                { id: 'csd', t: 'Certificado de Sello Digital (CSD)', d: 'Se genera con tu e.firma (programa Certifica del SAT). Lo necesitas para facturar con cualquier proveedor.' },
+                { id: 'facturador', t: 'Herramienta para facturar', d: 'Gratuita: servicio de facturación del portal del SAT. De pago: un proveedor (PAC), más práctico para factura global, cancelaciones y facturar desde el celular.' },
+                { id: 'factura_cliente', t: 'Proceso para facturar a quien lo pida', d: 'Pide RFC, nombre o razón social exactos, código postal, régimen fiscal y uso del CFDI. En esta app marca la venta como "Requiere factura" para no olvidarla.' },
+                { id: 'factura_global', t: 'Factura global al público en general', d: 'Ampara las ventas sin factura individual. Periodicidad diaria, semanal, mensual o bimestral (bimestral solo RESICO persona física). Se emite dentro de las 24 h siguientes al cierre del periodo. La pestaña Resumen te calcula el monto.' },
+                { id: 'cfdi_compras', t: 'Pedir factura de todas tus compras', d: 'Mercancía, renta, luz, internet, tóner, papel. Sin CFDI no puedes acreditar IVA ni deducir. Regístralas en la pestaña Gastos.' },
+                { id: 'pago_no_efectivo', t: 'Pagar gastos mayores a $2,000 sin efectivo', d: 'Para que una compra sea deducible arriba de $2,000 debe pagarse con transferencia, tarjeta o cheque nominativo.' },
+                { id: 'xml', t: 'Guardar los XML emitidos y recibidos (mínimo 5 años)', d: 'Descárgalos del portal o de tu PAC cada mes y respáldalos en la nube.' },
+            ]},
+            { grupo: 'SAT · Declaraciones', icon: 'ph-calendar-check', items: [
+                { id: 'mensual', t: 'Declaración mensual de ISR e IVA', d: 'A más tardar el día 17 del mes siguiente. Si un mes no vendes, se presenta en ceros mientras tengas obligaciones activas.' },
+                { id: 'anual', t: 'Declaración anual', d: 'Personas físicas: durante abril del año siguiente.' },
+                { id: 'diot', t: 'Confirmar si presentas DIOT', d: 'La Declaración Informativa de Operaciones con Terceros aplica según tu régimen y las facilidades vigentes. Pregúntale a tu contador.' },
+                { id: 'opinion', t: 'Opinión de cumplimiento en positivo', d: 'Revísala cada mes en el portal. Te la pedirán para créditos, apoyos o vender a empresas y gobierno.' },
+                { id: 'contador', t: 'Contador o despacho de confianza', d: 'Esta app estima, no declara. Un contador revisa régimen, deducciones y presenta en tiempo.' },
+            ]},
+            { grupo: 'Municipio y local', icon: 'ph-storefront', items: [
+                { id: 'uso_suelo', t: 'Uso de suelo compatible con comercio', d: 'Se solicita en el municipio o alcaldía antes de la licencia.' },
+                { id: 'licencia', t: 'Licencia o aviso de funcionamiento', d: 'Trámite municipal. En muchos municipios la papelería es giro de bajo impacto y basta un aviso; verifica en el tuyo.' },
+                { id: 'proteccion_civil', t: 'Protección Civil', d: 'Extintor vigente, botiquín, señalización de rutas de evacuación y, según el municipio, dictamen o visto bueno.' },
+                { id: 'anuncio', t: 'Permiso de anuncio o letrero', d: 'Algunos municipios lo cobran por separado.' },
+                { id: 'renta', t: 'Contrato de arrendamiento con factura del arrendador', d: 'Si rentas el local, exige CFDI por la renta: es gasto y su IVA se acredita.' },
+                { id: 'basura', t: 'Recolección de residuos comerciales', d: 'Muchos municipios exigen contrato o pago de derechos para comercios.' },
+            ]},
+            { grupo: 'Si contratas personal', icon: 'ph-users-three', items: [
+                { id: 'imss', t: 'Registro patronal en el IMSS', d: 'Da de alta a cada trabajador antes de que empiece a laborar.' },
+                { id: 'infonavit', t: 'Aportaciones al INFONAVIT', d: 'Se pagan bimestralmente junto con las cuotas del IMSS.' },
+                { id: 'isn', t: 'Impuesto Sobre Nómina (estatal)', d: 'Registro en la secretaría de finanzas de tu estado; la tasa varía por estado.' },
+                { id: 'nomina', t: 'Recibos de nómina timbrados (CFDI de nómina)', d: 'Por cada pago al trabajador, con la retención de ISR que corresponda.' },
+                { id: 'contrato_laboral', t: 'Contrato laboral por escrito', d: 'Protege a ambas partes ante la autoridad laboral.' },
+            ]},
+            { grupo: 'Clientes y operación', icon: 'ph-shield-check', items: [
+                { id: 'precios', t: 'Precios visibles con IVA incluido', d: 'Lo exige la Ley Federal de Protección al Consumidor (PROFECO).' },
+                { id: 'ticket', t: 'Entregar comprobante de compra', d: 'Ticket o nota a quien lo pida; si piden factura, el CFDI.' },
+                { id: 'banco', t: 'Cuenta bancaria solo para el negocio', d: 'Separa tus finanzas personales; facilita conciliar ventas con tarjeta y transferencia.' },
+                { id: 'terminal', t: 'Cobro con tarjeta y transferencia', d: 'Formaliza ingresos y reduce el manejo de efectivo. Registra el método de pago en cada venta.' },
+                { id: 'privacidad', t: 'Aviso de privacidad', d: 'Si guardas datos de clientes (por ejemplo, para facturar), debes tener uno visible.' },
+                { id: 'respaldo', t: 'Respaldo mensual de la información', d: 'Usa "Exportar respaldo" en Ajustes y guarda el archivo en la nube.' },
+            ]},
+            { grupo: 'Opcional / crecimiento', icon: 'ph-rocket-launch', items: [
+                { id: 'marca', t: 'Registro de marca ante el IMPI', d: 'Protege el nombre y logo de la papelería.' },
+                { id: 'seguro', t: 'Seguro del local y la mercancía', d: 'Robo, incendio, daños por agua: el papel es muy sensible.' },
+                { id: 'siem', t: 'Registro en el SIEM', d: 'Sistema de Información Empresarial Mexicano. Es obligatorio por ley para comercios, aunque se revisa poco.' },
+            ]},
+        ];
+        const CHECKLIST_TOTAL = CHECKLIST.reduce((s, g) => s + g.items.length, 0);
+
+        // =====================================================================
+        //  APP
+        // =====================================================================
+        function App() {
+            const [activeTab, setActiveTab] = useState('pos');
+            const [inventory, setInventory] = useState([]);
+            const [missingItems, setMissingItems] = useState([]);
+            const [cart, setCart] = useState([]);
+            const [notification, setNotification] = useState('');
+            const [isLoading, setIsLoading] = useState(true);
+
+            // Datos fiscales (se guardan en este dispositivo)
+            const [ventas, setVentas] = usePersisted('pap_ventas_v1', []);
+            const [gastos, setGastos] = usePersisted('pap_gastos_v1', []);
+            const [checklist, setChecklist] = usePersisted('pap_checklist_v1', {});
+            const [config, setConfig] = usePersisted('pap_config_v1', CONFIG_DEFAULT);
+            const [taxRates, setTaxRates] = usePersisted('pap_tasas_v1', {});
+
+            const cfg = { ...CONFIG_DEFAULT, ...config };
+            const rateFor = id => taxRates[id] !== undefined ? taxRates[id] : cfg.ivaDefault;
+
+            // ---------------- Sincronización con Google Sheets ----------------
+            // Cola de envíos pendientes: si no hay internet o el Sheet falla, nada se pierde;
+            // se reintenta al sincronizar o con la siguiente operación.
+            const [cola, setCola] = usePersisted('pap_cola_v1', []);
+            const colaRef = useRef(cola);
+            const flushing = useRef(null);
+            const lastConfigSent = useRef(null);
+            const setColaSync = next => { colaRef.current = next; setCola(next); };
+
+            const postOp = async op => {
+                const r = await fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    body: JSON.stringify(op),
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+                });
+                const data = await r.json();
+                if (!data.success) throw new Error(data.error || 'Error en el Sheet');
+                return data;
+            };
+
+            // Envía la cola en orden; se detiene en el primer fallo. Devuelve true si quedó vacía.
+            const flush = () => {
+                if (flushing.current) return flushing.current;
+                const run = async () => {
+                    while (colaRef.current.length) {
+                        const op = colaRef.current[0];
+                        try { await postOp(op); }
+                        catch (e) { console.warn('Envío pendiente:', e.message); break; }
+                        setColaSync(colaRef.current.filter(o => o._qid !== op._qid));
+                    }
+                    return colaRef.current.length === 0;
+                };
+                const p = run().finally(() => { if (flushing.current === p) flushing.current = null; });
+                flushing.current = p;
+                return p;
+            };
+
+            const enqueue = op => {
+                // Para la configuración solo importa el último envío
+                const base = op.accion === 'config' ? colaRef.current.filter(o => o.accion !== 'config') : colaRef.current;
+                setColaSync([...base, { ...op, _qid: Date.now() + Math.random() }]);
+                return flush();
+            };
+
+            useEffect(() => { fetchData(); }, []);
+
+            const fetchData = async () => {
+                setIsLoading(true);
+                const sinPendientes = await flush();
+                try {
+                    const response = await fetch(SCRIPT_URL);
+                    const data = await response.json();
+                    if (data.success === false) throw new Error(data.error);
+                    if (data.inventario && data.inventario.length > 0) {
+                        setInventory(data.inventario.map(i => ({
+                            ...i,
+                            unitCost: i.unitCost ?? i.costo, margin: i.margin ?? i.margen, minStock: i.minStock ?? i.minimo
+                        })));
+                    } else { showNotification("Base de datos vacía."); setInventory([]); }
+                    if (data.missingItems) setMissingItems(data.missingItems);
+
+                    // El Sheet manda, salvo que haya envíos pendientes (para no perder lo local)
+                    if (data.fiscal && sinPendientes) {
+                        const f = data.fiscal;
+                        setVentas(Array.isArray(f.ventas) ? f.ventas : []);
+                        setGastos(Array.isArray(f.gastos) ? f.gastos : []);
+                        const c = f.config || {};
+                        if (c.config || c.checklist || c.taxRates) {
+                            if (c.config) setConfig(c.config);
+                            if (c.checklist) setChecklist(c.checklist);
+                            if (c.taxRates) setTaxRates(c.taxRates);
+                            lastConfigSent.current = JSON.stringify({ config: c.config || config, checklist: c.checklist || checklist, taxRates: c.taxRates || taxRates });
+                        } else {
+                            // Primera conexión: sube lo que ya tenías en este dispositivo
+                            lastConfigSent.current = JSON.stringify({ config, checklist, taxRates });
+                            enqueue({ accion: 'config', config, checklist, taxRates });
+                            if (ventas.length || gastos.length) enqueue({ accion: 'importar', ventas, gastos });
+                        }
+                    } else if (data.fiscal && !sinPendientes) {
+                        showNotification(`${colaRef.current.length} envío(s) pendientes`);
+                    }
+                } catch (error) {
+                    showNotification("Error de sincronización.");
+                }
+                setIsLoading(false);
+            };
+
+            // Sube régimen, checklist y tasas de IVA cuando cambian (con pausa de 1.5 s)
+            useEffect(() => {
+                if (lastConfigSent.current === null) return; // aún no se ha leído el Sheet
+                const payload = JSON.stringify({ config, checklist, taxRates });
+                if (payload === lastConfigSent.current) return;
+                const t = setTimeout(() => {
+                    lastConfigSent.current = payload;
+                    enqueue({ accion: 'config', config, checklist, taxRates });
+                }, 1500);
+                return () => clearTimeout(t);
+            }, [config, checklist, taxRates]);
+
+            const showNotification = (msg) => {
+                setNotification(msg);
+                setTimeout(() => setNotification(''), 3000);
+            };
+
+            const addToCart = (product) => {
+                const existing = cart.find(item => item.id === product.id);
+                if (existing) {
+                    if (existing.quantity >= product.stock) { showNotification('Stock insuficiente'); return; }
+                    setCart(cart.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item));
+                } else {
+                    if (product.stock <= 0) { showNotification('Agotado'); return; }
+                    setCart([...cart, { ...product, quantity: 1 }]);
+                }
+            };
+
+            const checkout = async ({ metodoPago, requiereFactura }) => {
+                if (cart.length === 0) return;
+                const items = cart.map(i => {
+                    const rate = rateFor(i.id);
+                    const subtotal = Number(i.price) * i.quantity;
+                    const base = subtotal / (1 + rate);
+                    return { ...i, ivaRate: rate, subtotal, base, iva: subtotal - base };
+                });
+                const total = sum(items, i => i.subtotal);
+                const base = sum(items, i => i.base);
+                const now = Date.now();
+                const nuevaVenta = {
+                    id: now, ts: now, date: new Date(now).toLocaleString(),
+                    items: items.map(i => ({ id: i.id, name: i.name, quantity: i.quantity, price: Number(i.price), ivaRate: i.ivaRate })),
+                    total: +total.toFixed(2),
+                    metodoPago, requiereFactura, base: +base.toFixed(2), iva: +(total - base).toFixed(2)
+                };
+
+                // Registro fiscal local (compacto, sin detalle de artículos)
+                setVentas(prev => [{
+                    id: now, ts: now, total: +total.toFixed(2), base: nuevaVenta.base, iva: nuevaVenta.iva,
+                    metodoPago, requiereFactura, facturada: false, piezas: sum(items, i => i.quantity)
+                }, ...prev]);
+
+                setInventory(inventory.map(product => {
+                    const cartItem = cart.find(item => item.id === product.id);
+                    return cartItem ? { ...product, stock: product.stock - cartItem.quantity } : product;
+                }));
+                setCart([]);
+                showNotification('Procesando pago...');
+
+                const ok = await enqueue({ accion: "venta", venta: nuevaVenta });
+                if (ok) showNotification(requiereFactura ? 'Venta registrada · pendiente de facturar' : 'Venta registrada con éxito');
+                else showNotification('Sin conexión: la venta se enviará al sincronizar');
+            };
+
+            const [newMissing, setNewMissing] = useState('');
+            const handleAddMissing = async (e) => {
+                e.preventDefault();
+                if (!newMissing.trim()) return;
+                const query = newMissing.trim();
+                setNewMissing('');
+                setMissingItems(prev => {
+                    const ex = prev.find(m => String(m.name).toLowerCase() === query.toLowerCase());
+                    return ex ? prev.map(m => m === ex ? { ...m, count: (m.count || 1) + 1 } : m) : [...prev, { id: Date.now(), name: query, count: 1 }];
+                });
+                const ok = await enqueue({ accion: "faltante", faltante: { id: Date.now(), name: query } });
+                showNotification(ok ? 'Añadido a lista de deseos' : 'Sin conexión: se enviará al sincronizar');
+            };
+
+            // Operaciones fiscales: actualizan la pantalla al instante y se envían al Sheet
+            const sync = {
+                agregarGasto: g => { setGastos(prev => [g, ...prev]); enqueue({ accion: 'gasto', gasto: g }); },
+                borrarGasto: id => { setGastos(prev => prev.filter(g => g.id !== id)); enqueue({ accion: 'borrar_gasto', id }); },
+                marcarFacturada: id => { setVentas(prev => prev.map(v => v.id === id ? { ...v, facturada: true } : v)); enqueue({ accion: 'marcar_facturada', id }); },
+                importar: (ventasImp, gastosImp) => enqueue({ accion: 'importar', ventas: ventasImp, gastos: gastosImp }),
+            };
+
+            const pendientesFactura = ventas.filter(v => v.requiereFactura && !v.facturada).length;
+
+            return (
+                <div className="h-screen flex flex-col md:flex-row overflow-hidden bg-zinc-50">
+                    <nav className="hidden md:flex bg-zinc-950 text-zinc-400 w-64 flex-shrink-0 flex-col z-20 border-r border-zinc-800">
+                        <div className="p-8 text-xl font-semibold text-white tracking-tight flex items-center gap-3">
+                            <div className="w-8 h-8 bg-white text-zinc-950 rounded-lg flex items-center justify-center">
+                                <i className="ph-bold ph-cube text-xl"></i>
+                            </div>
+                            Papelería
+                        </div>
+                        <div className="flex flex-col px-4 gap-1">
+                            <NavButtonDesktop active={activeTab === 'pos'} onClick={() => setActiveTab('pos')} icon="ph-shopping-bag" text="Ventas" />
+                            <NavButtonDesktop active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon="ph-database" text="Inventario" />
+                            <NavButtonDesktop active={activeTab === 'missing'} onClick={() => setActiveTab('missing')} icon="ph-bookmark-simple" text="Deseos" />
+                            <NavButtonDesktop active={activeTab === 'fiscal'} onClick={() => setActiveTab('fiscal')} icon="ph-bank" text="Fiscal" badge={pendientesFactura} />
+                        </div>
+                        <div className="mt-auto p-4 mb-4">
+                            <button onClick={fetchData} className="w-full flex items-center justify-center gap-2 p-3 rounded-xl text-sm font-medium text-zinc-400 hover:text-white hover:bg-zinc-900 transition-all duration-200">
+                                <i className="ph ph-arrows-clockwise text-lg"></i> Sincronizar
+                                {cola.length > 0 && <span className="bg-amber-400 text-zinc-950 text-[10px] font-bold rounded-full px-1.5">{cola.length}</span>}
+                            </button>
+                            <div className={`text-[11px] text-center mt-1 ${cola.length ? 'text-amber-400' : 'text-zinc-600'}`}>
+                                {cola.length ? `${cola.length} envío(s) pendientes` : 'Todo guardado en el Sheet'}
+                            </div>
+                        </div>
+                    </nav>
+
+                    <main className="flex-1 relative flex flex-col h-full overflow-hidden">
+                        {notification && (
+                            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-zinc-900 text-white px-6 py-3 rounded-full shadow-lg flex items-center gap-3 animate-pop-in z-[60] text-sm font-medium border border-zinc-800 whitespace-nowrap">
+                                <i className="ph-fill ph-check-circle text-emerald-400 text-lg"></i>
+                                {notification}
+                            </div>
+                        )}
+
+                        {isLoading && activeTab !== 'fiscal' ? (
+                            <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 animate-fade-in-up">
+                                <i className="ph-light ph-circle-notch animate-spin text-4xl mb-3 text-zinc-300"></i>
+                                <p className="text-sm font-medium tracking-wide">Sincronizando...</p>
+                            </div>
+                        ) : (
+                            <div className="flex-1 overflow-y-auto pb-24 md:pb-0 p-4 md:p-8 no-scrollbar w-full max-w-7xl mx-auto">
+                                {activeTab === 'pos' && <div className="animate-fade-in-up h-full"><POSView inventory={inventory} cart={cart} addToCart={addToCart} setCart={setCart} checkout={checkout} /></div>}
+                                {activeTab === 'inventory' && <div className="animate-fade-in-up h-full"><InventoryView inventory={inventory} rateFor={rateFor} setTaxRates={setTaxRates} /></div>}
+                                {activeTab === 'missing' && <div className="animate-fade-in-up h-full"><MissingView missingItems={missingItems} newMissing={newMissing} setNewMissing={setNewMissing} handleAddMissing={handleAddMissing} /></div>}
+                                {activeTab === 'fiscal' && <div className="animate-fade-in-up"><FiscalView ventas={ventas} setVentas={setVentas} gastos={gastos} setGastos={setGastos} checklist={checklist} setChecklist={setChecklist} config={cfg} setConfig={setConfig} taxRates={taxRates} setTaxRates={setTaxRates} notify={showNotification} sync={sync} /></div>}
+                            </div>
+                        )}
+                    </main>
+
+                    <nav className="md:hidden fixed bottom-0 left-0 right-0 glass-nav border-t border-zinc-200/50 flex justify-around items-center pb-safe pt-2 px-2 z-40">
+                        <NavButtonMobile active={activeTab === 'pos'} onClick={() => setActiveTab('pos')} icon="ph-shopping-bag" text="Ventas" />
+                        <NavButtonMobile active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} icon="ph-database" text="Stock" />
+                        <NavButtonMobile active={activeTab === 'missing'} onClick={() => setActiveTab('missing')} icon="ph-bookmark-simple" text="Deseos" />
+                        <NavButtonMobile active={activeTab === 'fiscal'} onClick={() => setActiveTab('fiscal')} icon="ph-bank" text="Fiscal" badge={pendientesFactura} />
+                        <NavButtonMobile active={false} onClick={fetchData} icon="ph-arrows-clockwise" text="Sinc." badge={cola.length} />
+                    </nav>
                 </div>
-                {outOfStock && <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full shrink-0">Agotado</span>}
-                {lowStock   && <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full shrink-0">Bajo</span>}
-            </div>
-            <div className="flex items-end justify-between mt-auto">
-                <div>
-                    <p className="font-bold text-zinc-950">{fmt(item.price)}</p>
-                    <p className="text-xs text-zinc-400">Exist: {item.stock}</p>
+            );
+        }
+
+        // --- NAVEGACIÓN ---
+        const Badge = ({ n }) => n > 0 ? <span className="ml-auto bg-amber-400 text-zinc-950 text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center">{n}</span> : null;
+
+        const NavButtonDesktop = ({ active, onClick, icon, text, badge }) => (
+            <button onClick={onClick} className={`flex items-center gap-3 p-3 rounded-xl transition-all duration-300 font-medium text-sm ${active ? 'bg-zinc-800 text-white shadow-sm' : 'hover:bg-zinc-900 hover:text-zinc-200'}`}>
+                <i className={`ph${active ? '-fill' : ''} ${icon} text-xl`}></i> {text} <Badge n={badge} />
+            </button>
+        );
+
+        const NavButtonMobile = ({ active, onClick, icon, text, badge }) => (
+            <button onClick={onClick} className={`relative flex flex-col items-center justify-center w-full p-2 mb-1 transition-all duration-300 ${active ? 'text-zinc-950' : 'text-zinc-400'}`}>
+                <div className={`p-1.5 rounded-full transition-all duration-300 ${active ? 'bg-zinc-100' : ''}`}>
+                    <i className={`ph${active ? '-fill' : ''} ${icon} text-2xl`}></i>
                 </div>
-                {cartQty > 0 ? (
-                    <div className="flex items-center gap-1.5">
-                        <button onClick={() => onRemove(item.id)} className="w-7 h-7 rounded-full bg-zinc-100 hover:bg-zinc-200 flex items-center justify-center">
-                            <i className="ph ph-minus text-sm"></i>
-                        </button>
-                        <span className="w-5 text-center font-bold text-sm">{cartQty}</span>
-                        <button onClick={() => onAdd(item)} disabled={cartQty >= item.stock} className="w-7 h-7 rounded-full bg-zinc-900 flex items-center justify-center text-white disabled:opacity-30">
-                            <i className="ph ph-plus text-sm"></i>
-                        </button>
-                    </div>
-                ) : (
-                    <button onClick={() => onAdd(item)} disabled={outOfStock} className="flex items-center gap-1 px-3 py-1.5 bg-zinc-900 text-white text-xs font-medium rounded-lg disabled:opacity-40">
-                        <i className="ph ph-plus"></i> Agregar
-                    </button>
-                )}
-            </div>
-        </div>
-    );
-}
+                {badge > 0 && <span className="absolute top-1 right-1/4 bg-amber-400 text-zinc-950 text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{badge}</span>}
+                <span className={`text-[10px] mt-0.5 ${active ? 'font-semibold' : 'font-medium'}`}>{text}</span>
+            </button>
+        );
 
-function CartRow({ item, qty, onAdd, onRemove }) {
-    return (
-        <div className="flex items-center gap-2 py-2.5 border-b border-zinc-100 last:border-0">
-            <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-zinc-900 truncate">{item.name}</p>
-                <p className="text-xs text-zinc-400">{fmt(item.price)} c/u</p>
-            </div>
-            <div className="flex items-center gap-1">
-                <button onClick={() => onRemove(item.id)} className="w-6 h-6 rounded-full bg-zinc-100 hover:bg-zinc-200 flex items-center justify-center">
-                    <i className="ph ph-minus text-xs"></i>
-                </button>
-                <span className="w-5 text-center text-sm font-semibold">{qty}</span>
-                <button onClick={() => onAdd(item)} disabled={qty >= item.stock} className="w-6 h-6 rounded-full bg-zinc-900 flex items-center justify-center text-white disabled:opacity-30">
-                    <i className="ph ph-plus text-xs"></i>
-                </button>
-            </div>
-            <p className="w-14 text-right text-sm font-bold">{fmt(item.price * qty)}</p>
-        </div>
-    );
-}
+        // =====================================================================
+        //  VENTAS (POS)
+        // =====================================================================
+        const METODOS = [
+            { id: 'efectivo', label: 'Efectivo', icon: 'ph-money' },
+            { id: 'tarjeta', label: 'Tarjeta', icon: 'ph-credit-card' },
+            { id: 'transferencia', label: 'Transfer.', icon: 'ph-bank' },
+        ];
 
-function CheckoutModal({ total, onConfirm, onCancel, isProcessing }) {
-    const [method, setMethod] = useState("efectivo");
-    const [cash, setCash]     = useState("");
-    const cashNum = parseFloat(cash) || 0;
-    const change  = cashNum - total;
-    const canPay  = method === "tarjeta" || cashNum >= total;
+        function POSView({ inventory, cart, addToCart, setCart, checkout }) {
+            const [search, setSearch] = useState('');
+            const [showMobileCart, setShowMobileCart] = useState(false);
+            const [amountPaid, setAmountPaid] = useState('');
+            const [showConfirm, setShowConfirm] = useState(false);
+            const [metodo, setMetodo] = useState('efectivo');
+            const [requiereFactura, setRequiereFactura] = useState(false);
 
-    const quick = [...new Set([
-        Math.ceil(total),
-        Math.ceil(total / 10) * 10,
-        Math.ceil(total / 50) * 50,
-        Math.ceil(total / 100) * 100,
-    ])].slice(0, 4);
+            useEffect(() => {
+                if (cart.length === 0) { setAmountPaid(''); setRequiereFactura(false); setMetodo('efectivo'); }
+            }, [cart.length]);
 
-    return (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:50,padding:'1rem'}}>
-            <div className="bg-white rounded-2xl w-full max-w-sm p-5">
-                <h2 className="text-lg font-bold text-zinc-900 mb-4">Cobrar venta</h2>
-                <div className="flex gap-2 mb-4">
-                    {[["efectivo","Efectivo","ph-money"],["tarjeta","Tarjeta","ph-credit-card"]].map(([val, label, icon]) => (
-                        <button key={val} onClick={() => setMethod(val)}
-                            className={`flex-1 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-1 transition-colors ${method === val ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}>
-                            <i className={`ph ${icon}`}></i> {label}
-                        </button>
-                    ))}
-                </div>
-                <div className="bg-zinc-50 rounded-xl p-4 mb-4 flex justify-between items-center">
-                    <span className="text-zinc-500">Total</span>
-                    <span className="text-2xl font-bold text-zinc-950">{fmt(total)}</span>
-                </div>
-                {method === "efectivo" && (<>
-                    <label className="text-sm text-zinc-500 mb-1 block">Con cuánto paga</label>
-                    <input type="number" value={cash} onChange={e => setCash(e.target.value)} placeholder="0.00" autoFocus
-                        className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-lg font-semibold text-right mb-3 focus:outline-none focus:ring-2 focus:ring-zinc-900"/>
-                    <div className="flex gap-2 mb-4">
-                        {quick.map(a => (
-                            <button key={a} onClick={() => setCash(String(a))} className="flex-1 py-1.5 bg-zinc-100 hover:bg-zinc-200 rounded-lg text-xs font-medium text-zinc-700">${a}</button>
-                        ))}
-                    </div>
-                    {cashNum >= total && (
-                        <div className="flex justify-between items-center bg-green-50 rounded-xl px-4 py-3 mb-4">
-                            <span className="text-green-700 font-medium">Cambio</span>
-                            <span className="text-2xl font-bold text-green-700">{fmt(change)}</span>
+            const total = cart.reduce((s, item) => s + (item.price * item.quantity), 0);
+            const totalItems = cart.reduce((s, item) => s + item.quantity, 0);
+            const esEfectivo = metodo === 'efectivo';
+            const change = (parseFloat(amountPaid) || 0) - total;
+            const isPaymentValid = cart.length > 0 && (!esEfectivo || (amountPaid !== '' && parseFloat(amountPaid) >= total - 0.001));
+
+            const safeInventory = Array.isArray(inventory) ? inventory : [];
+            const filtered = safeInventory.filter(i => i.name && i.name.toLowerCase().includes(search.toLowerCase()));
+
+            const confirmCheckout = () => {
+                setShowConfirm(false);
+                setAmountPaid('');
+                checkout({ metodoPago: metodo, requiereFactura });
+                setShowMobileCart(false);
+            };
+
+            const updateQty = (id, delta) => {
+                setCart(cart.flatMap(i => {
+                    if (i.id !== id) return [i];
+                    const q = i.quantity + delta;
+                    if (q <= 0) return [];
+                    if (q > i.stock) return [i];
+                    return [{ ...i, quantity: q }];
+                }));
+            };
+
+            return (
+                <div className="h-full flex flex-col lg:flex-row gap-6 lg:gap-8 relative">
+                    {showConfirm && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-zinc-950/40 backdrop-blur-sm animate-fade-in-up">
+                            <div className="bg-white rounded-3xl p-6 md:p-8 w-full max-w-sm shadow-2xl animate-pop-in">
+                                <div className="text-center mb-6">
+                                    <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                        <i className="ph-fill ph-receipt text-3xl text-zinc-900"></i>
+                                    </div>
+                                    <h3 className="text-xl font-bold text-zinc-950 tracking-tight">Confirmar Pago</h3>
+                                    <p className="text-sm text-zinc-500 mt-1">{esEfectivo ? 'Verifica el cambio antes de procesar.' : 'Verifica que el cobro se haya aprobado.'}</p>
+                                </div>
+                                <div className="bg-zinc-50 rounded-2xl p-4 mb-6 border border-zinc-100 space-y-3">
+                                    <div className="flex justify-between text-sm"><span className="text-zinc-500">Total a cobrar:</span><span className="font-semibold text-zinc-900">{money(total)}</span></div>
+                                    <div className="flex justify-between text-sm"><span className="text-zinc-500">Método:</span><span className="font-semibold text-zinc-900 capitalize">{metodo}</span></div>
+                                    {requiereFactura && <div className="flex justify-between text-sm"><span className="text-zinc-500">Factura:</span><span className="font-semibold text-amber-600">Pendiente de emitir</span></div>}
+                                    {esEfectivo && <>
+                                        <div className="flex justify-between text-sm"><span className="text-zinc-500">Efectivo recibido:</span><span className="font-semibold text-zinc-900">{money(parseFloat(amountPaid))}</span></div>
+                                        <div className="pt-3 border-t border-zinc-200 flex justify-between items-center">
+                                            <span className="font-medium text-zinc-900">Cambio a dar:</span>
+                                            <span className="text-2xl font-bold text-emerald-500 tracking-tight">{money(change)}</span>
+                                        </div>
+                                    </>}
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setShowConfirm(false)} className="flex-1 py-3.5 rounded-xl font-semibold text-sm bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors">Cancelar</button>
+                                    <button onClick={confirmCheckout} className="flex-1 py-3.5 rounded-xl font-semibold text-sm bg-zinc-950 text-white hover:bg-zinc-800 transition-all active:scale-95 shadow-md">Confirmar</button>
+                                </div>
+                            </div>
                         </div>
                     )}
-                </>)}
-                <div className="flex gap-2 mt-2">
-                    <button onClick={onCancel} disabled={isProcessing} className="flex-1 py-3 border border-zinc-300 rounded-xl text-zinc-700 font-medium hover:bg-zinc-50">
-                        Cancelar
-                    </button>
-                    <button onClick={() => onConfirm({ method, cash: cashNum, change: Math.max(0, change) })} disabled={!canPay || isProcessing}
-                        className="flex-1 py-3 bg-zinc-900 rounded-xl text-white font-semibold disabled:opacity-40 flex items-center justify-center gap-2">
-                        {isProcessing
-                            ? <><i className="ph ph-circle-notch animate-spin"></i> Guardando…</>
-                            : <><i className="ph ph-check-circle"></i> Confirmar</>}
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-}
 
-function SuccessModal({ sale, onClose }) {
-    return (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:'1rem'}}>
-            <div className="bg-white rounded-2xl w-full max-w-xs p-6 text-center">
-                <div className="w-14 h-14 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <i className="ph ph-check-circle text-3xl text-green-600"></i>
-                </div>
-                <h2 className="text-lg font-bold text-zinc-900">¡Venta registrada!</h2>
-                <p className="text-sm text-zinc-400 mt-1 mb-4">Folio: {sale.folio}</p>
-                <div className="bg-zinc-50 rounded-xl p-4 mb-4 text-left space-y-2 text-sm">
-                    <div className="flex justify-between">
-                        <span className="text-zinc-500">Total</span>
-                        <span className="font-bold">{fmt(sale.total)}</span>
-                    </div>
-                    {sale.method === "efectivo" && (<>
-                        <div className="flex justify-between">
-                            <span className="text-zinc-500">Recibido</span>
-                            <span className="font-bold">{fmt(sale.cash)}</span>
+                    {/* CATÁLOGO */}
+                    <div className="flex-1 flex flex-col h-full">
+                        <div className="relative mb-6 group">
+                            <i className="ph ph-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 text-xl transition-colors group-focus-within:text-zinc-900"></i>
+                            <input type="text" placeholder="Buscar productos o servicios..." value={search} onChange={e => setSearch(e.target.value)}
+                                className="w-full pl-12 pr-4 py-3.5 sm:py-4 bg-white border border-zinc-200 rounded-2xl shadow-[0_2px_10px_rgba(0,0,0,0.02)] focus:ring-2 focus:ring-zinc-950/10 focus:border-zinc-950 outline-none text-sm sm:text-base transition-all" />
                         </div>
-                        <div className="flex justify-between">
-                            <span className="text-zinc-500">Cambio</span>
-                            <span className="font-bold text-green-600">{fmt(sale.change)}</span>
-                        </div>
-                    </>)}
-                </div>
-                <button onClick={onClose} className="w-full py-3 bg-zinc-900 rounded-xl text-white font-semibold hover:bg-zinc-700">
-                    Nueva venta
-                </button>
-            </div>
-        </div>
-    );
-}
-
-function App() {
-    const [inventory,    setInventory]    = useState([]);
-    const [isLoading,    setIsLoading]    = useState(true);
-    const [error,        setError]        = useState(null);
-    const [cart,         setCart]         = useState({});
-    const [search,       setSearch]       = useState("");
-    const [activeTab,    setActiveTab]    = useState("productos");
-    const [showCheckout, setShowCheckout] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [lastSale,     setLastSale]     = useState(null);
-
-    const fetchInventory = async () => {
-        setIsLoading(true);
-        setError(null);
-        try {
-            const res  = await fetch(SCRIPT_URL, { redirect: "follow" });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            setInventory(data.inventario || []);
-        } catch (e) {
-            setError(e.message);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    useEffect(() => { fetchInventory(); }, []);
-
-    const addToCart = item => setCart(prev => {
-        const cur      = prev[item.id] || 0;
-        const found    = inventory.find(i => i.id === item.id);
-        const maxStock = found ? found.stock : 0;
-        if (cur >= maxStock) return prev;
-        return { ...prev, [item.id]: cur + 1 };
-    });
-
-    const removeFromCart = id => setCart(prev => {
-        if ((prev[id] || 0) <= 1) { const n = {...prev}; delete n[id]; return n; }
-        return { ...prev, [id]: prev[id] - 1 };
-    });
-
-    const cartItems = useMemo(() =>
-        Object.entries(cart)
-            .map(([id, qty]) => ({ item: inventory.find(i => String(i.id) === id), qty }))
-            .filter(x => x.item),
-        [cart, inventory]);
-
-    const total     = useMemo(() => cartItems.reduce((s, {item, qty}) => s + item.price * qty, 0), [cartItems]);
-    const cartCount = useMemo(() => cartItems.reduce((s, {qty}) => s + qty, 0), [cartItems]);
-
-    const filtered = useMemo(() => {
-        const q = search.toLowerCase();
-        return inventory.filter(i => i.name.toLowerCase().includes(q) || String(i.id).includes(q));
-    }, [inventory, search]);
-
-    const handleConfirm = async ({ method, cash, change }) => {
-        setIsProcessing(true);
-        const folio = genFolio();
-        const fecha = new Date().toLocaleString("es-MX");
-        try {
-            await fetch(SCRIPT_URL, {
-                method: "POST",
-                redirect: "follow",
-                body: JSON.stringify({
-                    folio, fecha, method, total,
-                    items: cartItems.map(({ item, qty }) => ({
-                        id: item.id, name: item.name, qty, price: item.price
-                    })),
-                }),
-            });
-        } catch (e) { console.error("Error al guardar venta:", e); }
-
-        setCart({});
-        setShowCheckout(false);
-        setActiveTab("productos");
-        setLastSale({ folio, total, method, cash, change });
-        setIsProcessing(false);
-        fetchInventory();
-    };
-
-    return (
-        <div className="h-screen flex flex-col bg-zinc-100 overflow-hidden">
-
-            <header className="bg-white border-b border-zinc-200 px-4 py-3 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                    <i className="ph ph-storefront text-xl text-zinc-900"></i>
-                    <span className="font-bold text-zinc-900">Papelería POS</span>
-                </div>
-                <button onClick={fetchInventory} className="p-2 rounded-lg hover:bg-zinc-100 text-zinc-500" title="Actualizar inventario">
-                    <i className={`ph ph-arrows-clockwise ${isLoading ? 'animate-spin' : ''}`}></i>
-                </button>
-            </header>
-
-            <div className="flex flex-1 overflow-hidden">
-
-                <div className={`flex flex-col flex-1 overflow-hidden ${activeTab === 'carrito' ? 'hidden sm:flex' : ''}`}>
-                    <div className="px-3 py-2 bg-white border-b border-zinc-200 shrink-0">
-                        <div className="relative">
-                            <i className="ph ph-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400"></i>
-                            <input type="text" placeholder="Buscar por nombre o ID…" value={search} onChange={e => setSearch(e.target.value)}
-                                className="w-full pl-9 pr-4 py-2 bg-zinc-100 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"/>
+                        <div className="overflow-y-auto flex-1 no-scrollbar pb-16 lg:pb-0">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                                {filtered.length === 0 ? (
+                                    <p className="text-zinc-400 col-span-full text-center mt-10 text-sm">No se encontraron productos.</p>
+                                ) : (
+                                    filtered.map((item, index) => (
+                                        <button key={item.id} onClick={() => addToCart(item)} disabled={item.stock <= 0}
+                                            style={{ animationDelay: `${Math.min(index, 20) * 30}ms` }}
+                                            className={`animate-fade-in-up p-4 rounded-2xl border text-left flex flex-col justify-between h-32 sm:h-36 transition-all duration-300 active:scale-95 group
+                                            ${item.stock <= 0 ? 'bg-zinc-50 opacity-50 border-zinc-200 cursor-not-allowed' : 'bg-white hover:border-zinc-400 hover:shadow-[0_8px_20px_rgba(0,0,0,0.04)] hover:-translate-y-1 border-zinc-200'}`}>
+                                            <div>
+                                                <div className="font-semibold text-zinc-800 leading-tight text-sm line-clamp-2">{item.name}</div>
+                                                <div className="text-[10px] sm:text-xs text-zinc-400 mt-1.5 font-medium tracking-wide">STOCK: {item.stock > 900000 ? '∞' : item.stock}</div>
+                                            </div>
+                                            <div className="text-base sm:text-lg font-bold text-zinc-950 mt-2">{money(item.price)}</div>
+                                        </button>
+                                    ))
+                                )}
+                            </div>
                         </div>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-3 no-scrollbar">
-                        {isLoading ? (
-                            <div className="flex flex-col items-center justify-center h-40 text-zinc-400 gap-2">
-                                <i className="ph ph-circle-notch animate-spin text-2xl"></i>
-                                <p className="text-sm">Cargando inventario…</p>
-                            </div>
-                        ) : error ? (
-                            <div className="flex flex-col items-center justify-center h-40 gap-2 text-zinc-400">
-                                <i className="ph ph-warning text-2xl text-amber-400"></i>
-                                <p className="text-sm">Error al cargar. <button onClick={fetchInventory} className="underline text-zinc-700">Reintentar</button></p>
-                            </div>
-                        ) : filtered.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-40 text-zinc-400 gap-2">
-                                <i className="ph ph-smiley-sad text-2xl"></i>
-                                <p className="text-sm">Sin resultados para "{search}"</p>
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                                {filtered.map(item => (
-                                    <ProductCard key={item.id} item={item} cartQty={cart[item.id] || 0} onAdd={addToCart} onRemove={removeFromCart}/>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
 
-                <div className={`w-full sm:w-80 flex flex-col bg-white border-l border-zinc-200 shrink-0 ${activeTab === 'productos' ? 'hidden sm:flex' : ''}`}>
-                    <div className="px-4 py-3 border-b border-zinc-100 flex items-center justify-between shrink-0">
-                        <h2 className="font-bold text-zinc-900 flex items-center gap-2">
-                            <i className="ph ph-shopping-cart"></i> Carrito
-                        </h2>
-                        {cartCount > 0 && <span className="bg-zinc-900 text-white text-xs px-2 py-0.5 rounded-full">{cartCount}</span>}
-                    </div>
-                    <div className="flex-1 overflow-y-auto px-4 no-scrollbar">
-                        {cartItems.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-40 text-zinc-300 gap-2">
-                                <i className="ph ph-shopping-cart text-4xl"></i>
-                                <p className="text-sm">Carrito vacío</p>
-                            </div>
-                        ) : (
-                            <div className="py-2">
-                                {cartItems.map(({ item, qty }) => (
-                                    <CartRow key={item.id} item={item} qty={qty} onAdd={addToCart} onRemove={removeFromCart}/>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                    <div className="p-4 border-t border-zinc-200 shrink-0">
-                        <div className="flex justify-between items-center mb-3">
-                            <span className="text-zinc-400 text-sm">{cartCount} artículo{cartCount !== 1 ? 's' : ''}</span>
-                            <span className="text-xl font-bold text-zinc-950">{fmt(total)}</span>
-                        </div>
-                        <button onClick={() => setShowCheckout(true)} disabled={cartItems.length === 0}
-                            className="w-full py-3 bg-zinc-900 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors">
-                            <i className="ph ph-cash-register"></i>
-                            Cobrar {cartItems.length > 0 && fmt(total)}
-                        </button>
-                        {cartItems.length > 0 && (
-                            <button onClick={() => setCart({})} className="w-full mt-2 py-2 text-sm text-zinc-400 hover:text-red-500 transition-colors">
-                                Vaciar carrito
+                    {cart.length > 0 && !showMobileCart && (
+                        <div className="lg:hidden fixed bottom-20 left-4 right-4 z-30 animate-pop-in">
+                            <button onClick={() => setShowMobileCart(true)} className="w-full bg-zinc-950 text-white rounded-2xl p-4 shadow-2xl flex justify-between items-center font-semibold text-base transition-transform active:scale-95">
+                                <span className="flex items-center gap-2"><div className="bg-white/20 px-2.5 py-1 rounded-lg text-sm">{totalItems}</div>Ver Ticket</span>
+                                <span className="text-lg">{money(total)}</span>
                             </button>
-                        )}
+                        </div>
+                    )}
+
+                    {/* TICKET */}
+                    <div className={`${showMobileCart ? 'fixed inset-0 z-50 bg-white flex flex-col animate-slide-up' : 'hidden'} lg:flex lg:relative lg:w-96 lg:bg-white lg:rounded-3xl lg:shadow-[0_8px_30px_rgba(0,0,0,0.04)] lg:border lg:border-zinc-200 lg:flex-col lg:h-[calc(100vh-4rem)] overflow-hidden`}>
+                        <div className="flex justify-between items-center p-6 border-b border-zinc-100">
+                            <h2 className="text-lg font-bold text-zinc-950 tracking-tight">Venta Actual</h2>
+                            <button onClick={() => setShowMobileCart(false)} className="lg:hidden p-2 bg-zinc-100 rounded-full text-zinc-600 hover:bg-zinc-200 transition-colors"><i className="ph ph-x text-lg"></i></button>
+                            <span className="hidden lg:flex bg-zinc-100 text-zinc-600 px-3 py-1 rounded-full text-xs font-bold">{totalItems} items</span>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto flex flex-col px-4 py-2 no-scrollbar">
+                            {cart.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center h-full text-zinc-300 gap-3">
+                                    <i className="ph-light ph-shopping-bag text-5xl"></i>
+                                    <p className="text-sm font-medium">El ticket está vacío</p>
+                                </div>
+                            ) : (
+                                cart.map(item => (
+                                    <div key={item.id} className="flex justify-between items-center py-3 border-b border-zinc-50 animate-pop-in gap-2">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-medium text-zinc-900 text-sm truncate">{item.name}</div>
+                                            <div className="flex items-center gap-1 mt-1">
+                                                <button onClick={() => updateQty(item.id, -1)} className="w-6 h-6 rounded-md bg-zinc-100 text-zinc-600 hover:bg-zinc-200"><i className="ph ph-minus text-xs"></i></button>
+                                                <span className="text-xs text-zinc-500 w-14 text-center">{item.quantity} × {money(item.price)}</span>
+                                                <button onClick={() => updateQty(item.id, 1)} className="w-6 h-6 rounded-md bg-zinc-100 text-zinc-600 hover:bg-zinc-200"><i className="ph ph-plus text-xs"></i></button>
+                                            </div>
+                                        </div>
+                                        <div className="font-semibold text-zinc-950 text-sm">{money(item.quantity * item.price)}</div>
+                                        <button onClick={() => setCart(cart.filter(i => i.id !== item.id))} className="text-zinc-300 hover:text-red-500 p-1.5 transition-colors"><i className="ph-fill ph-x-circle text-xl"></i></button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+
+                        <div className="p-5 lg:p-6 bg-zinc-50/50 border-t border-zinc-100 mt-auto">
+                            <div className="flex justify-between items-end mb-4">
+                                <span className="text-zinc-500 font-medium text-sm mb-1">Total a cobrar</span>
+                                <span className="text-3xl font-bold text-zinc-950 tracking-tight">{money(total)}</span>
+                            </div>
+
+                            {cart.length > 0 && (
+                                <div className="space-y-3 mb-5 animate-fade-in-up">
+                                    <div className="grid grid-cols-3 gap-1.5 bg-zinc-100 p-1 rounded-xl">
+                                        {METODOS.map(m => (
+                                            <button key={m.id} onClick={() => setMetodo(m.id)}
+                                                className={`py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${metodo === m.id ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-500'}`}>
+                                                <i className={`ph ${m.icon} text-sm`}></i>{m.label}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {esEfectivo && (
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-zinc-500 font-medium text-sm">Recibido:</span>
+                                            <div className="flex items-center gap-2">
+                                                <button onClick={() => setAmountPaid(total.toFixed(2))} className="px-3 py-2 text-xs font-bold text-zinc-500 bg-zinc-200/60 hover:bg-zinc-300 hover:text-zinc-800 rounded-lg transition-colors">Exacto</button>
+                                                <div className="relative w-24 sm:w-28">
+                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 font-medium">$</span>
+                                                    <input type="number" inputMode="decimal" min={total} step="0.5" placeholder="0.00" value={amountPaid} onChange={e => setAmountPaid(e.target.value)}
+                                                        className="w-full pl-7 pr-3 py-2.5 bg-white border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-950/10 focus:border-zinc-950 outline-none text-right font-bold text-zinc-900 transition-all shadow-sm" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {esEfectivo && isPaymentValid && (
+                                        <div className="flex justify-between items-center pt-3 border-t border-zinc-200/50">
+                                            <span className="text-zinc-500 font-medium text-sm">Cambio:</span>
+                                            <span className="text-xl font-bold text-emerald-500 tracking-tight">{money(change)}</span>
+                                        </div>
+                                    )}
+
+                                    <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer select-none pt-1">
+                                        <input type="checkbox" checked={requiereFactura} onChange={e => setRequiereFactura(e.target.checked)} className="w-4 h-4 accent-zinc-950" />
+                                        El cliente requiere factura
+                                    </label>
+                                </div>
+                            )}
+
+                            <button onClick={() => isPaymentValid && setShowConfirm(true)} disabled={!isPaymentValid}
+                                className={`w-full py-4 rounded-2xl font-semibold text-sm transition-all duration-300 flex justify-center items-center gap-2 ${!isPaymentValid ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed' : 'bg-zinc-950 text-white hover:bg-zinc-800 hover:shadow-lg active:scale-95'}`}>
+                                Procesar Pago
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </div>
+            );
+        }
 
-            <div className="sm:hidden flex bg-white border-t border-zinc-200 shrink-0">
-                {[["productos","Productos","ph-grid-four"],["carrito","Carrito","ph-shopping-cart"]].map(([tab, label, icon]) => (
-                    <button key={tab} onClick={() => setActiveTab(tab)}
-                        className={`flex-1 py-3 flex flex-col items-center gap-0.5 text-xs font-medium relative transition-colors ${activeTab === tab ? 'text-zinc-900' : 'text-zinc-400'}`}>
-                        <i className={`ph ${icon} text-xl`}></i>
-                        {label}
-                        {tab === 'carrito' && cartCount > 0 && (
-                            <span className="absolute top-2 right-[30%] w-4 h-4 bg-zinc-900 text-white text-xs rounded-full flex items-center justify-center">{cartCount}</span>
+        // =====================================================================
+        //  INVENTARIO (con tasa de IVA por producto)
+        // =====================================================================
+        function InventoryView({ inventory, rateFor, setTaxRates }) {
+            const safeInventory = Array.isArray(inventory) ? inventory : [];
+            const toggleRate = id => {
+                const next = rateFor(id) > 0 ? 0 : 0.16;
+                setTaxRates(prev => ({ ...prev, [id]: next }));
+            };
+
+            return (
+                <div className="flex-1 bg-white rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-zinc-200 flex flex-col h-[calc(100vh-7rem)] md:h-[calc(100vh-4rem)] overflow-hidden max-w-6xl mx-auto w-full">
+                    <div className="p-6 md:p-8 border-b border-zinc-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div>
+                            <h2 className="text-xl font-bold text-zinc-950 tracking-tight">Inventario Global</h2>
+                            <p className="text-sm text-zinc-400 mt-1">Sincronizado con Google Sheets · toca la tasa de IVA para cambiarla (libros y revistas: 0%)</p>
+                        </div>
+                        <span className="text-xs font-semibold tracking-widest uppercase bg-zinc-100 text-zinc-500 px-3 py-1.5 rounded-lg">Solo lectura</span>
+                    </div>
+                    <div className="overflow-x-auto flex-1 no-scrollbar">
+                        <table className="w-full text-left border-collapse whitespace-nowrap">
+                            <thead className="bg-zinc-50/50 text-zinc-500 text-xs uppercase tracking-wider font-semibold border-b border-zinc-200">
+                                <tr>
+                                    <th className="py-4 px-6">Artículo</th>
+                                    <th className="py-4 px-6 text-right">Costo</th>
+                                    <th className="py-4 px-6 text-center">Margen</th>
+                                    <th className="py-4 px-6 text-right">Precio</th>
+                                    <th className="py-4 px-6 text-center">IVA</th>
+                                    <th className="py-4 px-6 text-right">Stock</th>
+                                    <th className="py-4 px-6 text-center">Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody className="text-sm">
+                                {safeInventory.length === 0 ? (
+                                    <tr><td colSpan="7" className="text-center py-16 text-zinc-400 font-medium">No hay productos sincronizados.</td></tr>
+                                ) : (
+                                    safeInventory.map(item => {
+                                        const isService = item.stock > 900000;
+                                        const isOut = !isService && item.stock <= 0;
+                                        const isLowStock = !isService && item.stock <= (item.minStock || 2) && !isOut;
+                                        const rate = rateFor(item.id);
+                                        return (
+                                            <tr key={item.id} className="border-b border-zinc-50 hover:bg-zinc-50/50 transition-colors">
+                                                <td className="py-4 px-6 font-medium text-zinc-900">{item.name}</td>
+                                                <td className="py-4 px-6 text-right text-zinc-500">{money(item.unitCost)}</td>
+                                                <td className="py-4 px-6 text-center text-zinc-400">{item.margin || 0}%</td>
+                                                <td className="py-4 px-6 text-right font-semibold text-zinc-900">{money(item.price)}</td>
+                                                <td className="py-4 px-6 text-center">
+                                                    <button onClick={() => toggleRate(item.id)} className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors ${rate > 0 ? 'bg-white border-zinc-200 text-zinc-700 hover:border-zinc-400' : 'bg-sky-50 border-sky-100 text-sky-700 hover:border-sky-300'}`}>
+                                                        {Math.round(rate * 100)}%
+                                                    </button>
+                                                </td>
+                                                <td className="py-4 px-6 text-right font-medium text-zinc-600">{isService ? '∞' : item.stock}</td>
+                                                <td className="py-4 px-6 text-center">
+                                                    {isService ? <span className="px-2.5 py-1 bg-zinc-100 text-zinc-600 rounded-md text-[10px] uppercase font-bold tracking-wider">Servicio</span>
+                                                    : isOut ? <span className="px-2.5 py-1 bg-red-50 text-red-600 border border-red-100 rounded-md text-[10px] uppercase font-bold tracking-wider">Agotado</span>
+                                                    : isLowStock ? <span className="px-2.5 py-1 bg-amber-50 text-amber-600 border border-amber-100 rounded-md text-[10px] uppercase font-bold tracking-wider">Bajo</span>
+                                                    : <span className="px-2.5 py-1 text-emerald-600 font-medium text-xs">OK</span>}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        // =====================================================================
+        //  DESEOS
+        // =====================================================================
+        function MissingView({ missingItems, newMissing, setNewMissing, handleAddMissing }) {
+            const safeMissing = Array.isArray(missingItems) ? missingItems : [];
+            return (
+                <div className="flex-1 max-w-2xl mx-auto w-full flex flex-col gap-6 h-[calc(100vh-7rem)] md:h-[calc(100vh-4rem)]">
+                    <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-zinc-200 flex-shrink-0">
+                        <div className="mb-6">
+                            <h2 className="text-xl font-bold text-zinc-950 tracking-tight">Registro de Faltantes</h2>
+                            <p className="text-sm text-zinc-400 mt-1">Anota los productos que te piden y no tienes en bodega.</p>
+                        </div>
+                        <form onSubmit={handleAddMissing} className="flex flex-col sm:flex-row gap-3">
+                            <input required type="text" placeholder="Ej. Foamy escarchado verde..." value={newMissing} onChange={e => setNewMissing(e.target.value)}
+                                className="flex-1 p-3.5 bg-zinc-50 border border-zinc-200 rounded-2xl outline-none focus:ring-2 focus:ring-zinc-950/10 focus:border-zinc-950 transition-all text-sm" />
+                            <button type="submit" className="bg-zinc-950 text-white px-8 py-3.5 rounded-2xl font-semibold hover:bg-zinc-800 active:scale-95 transition-all text-sm">Registrar</button>
+                        </form>
+                    </div>
+                    <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-zinc-200 flex-1 flex flex-col overflow-hidden">
+                        <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-6">Lista de Deseos Global</h2>
+                        <div className="flex flex-col gap-3 overflow-y-auto no-scrollbar pb-10">
+                            {safeMissing.length === 0 ? (
+                                <div className="text-center mt-12 text-zinc-400">
+                                    <i className="ph-light ph-check-circle text-4xl mb-3 text-zinc-300"></i>
+                                    <p className="text-sm font-medium">No hay faltantes registrados.</p>
+                                </div>
+                            ) : (
+                                [...safeMissing].sort((a, b) => b.count - a.count).map((item, index) => (
+                                    <div key={item.id} style={{ animationDelay: `${index * 40}ms` }} className="animate-fade-in-up flex justify-between items-center p-4 bg-zinc-50 rounded-2xl border border-zinc-100 hover:border-zinc-200 transition-colors">
+                                        <span className="font-medium text-zinc-800 text-sm">{item.name}</span>
+                                        <span className="bg-white border border-zinc-200 text-zinc-600 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5">
+                                            <i className="ph-fill ph-trend-up text-zinc-400"></i> {item.count}
+                                        </span>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // =====================================================================
+        //  MÓDULO FISCAL
+        // =====================================================================
+        const Card = ({ children, className = '' }) => (
+            <div className={`bg-white rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-zinc-200 p-5 sm:p-6 ${className}`}>{children}</div>
+        );
+        const Stat = ({ label, value, hint, tone = 'zinc' }) => {
+            const tones = { zinc: 'text-zinc-950', green: 'text-emerald-600', amber: 'text-amber-600', red: 'text-red-600', sky: 'text-sky-700' };
+            return (
+                <div className="bg-zinc-50 border border-zinc-100 rounded-2xl p-4">
+                    <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400">{label}</div>
+                    <div className={`text-xl sm:text-2xl font-bold tracking-tight mt-1 ${tones[tone]}`}>{value}</div>
+                    {hint && <div className="text-xs text-zinc-400 mt-1">{hint}</div>}
+                </div>
+            );
+        };
+        const Row = ({ k, v, strong, muted }) => (
+            <div className={`flex justify-between py-2 text-sm ${strong ? 'border-t border-zinc-200 mt-1 pt-3 font-semibold text-zinc-950' : ''}`}>
+                <span className={muted ? 'text-zinc-400' : 'text-zinc-500'}>{k}</span><span className={strong ? '' : 'text-zinc-900 font-medium'}>{v}</span>
+            </div>
+        );
+        const inputCls = "w-full p-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-zinc-950/10 focus:border-zinc-950 transition-all text-sm";
+
+        function FiscalView(props) {
+            const [sub, setSub] = useState('resumen');
+            const done = Object.values(props.checklist).filter(Boolean).length;
+            const tabs = [
+                { id: 'resumen', label: 'Resumen', icon: 'ph-chart-pie-slice' },
+                { id: 'gastos', label: 'Gastos', icon: 'ph-receipt' },
+                { id: 'checklist', label: `Checklist ${done}/${CHECKLIST_TOTAL}`, icon: 'ph-list-checks' },
+                { id: 'ajustes', label: 'Ajustes', icon: 'ph-gear-six' },
+            ];
+            return (
+                <div className="max-w-5xl mx-auto w-full flex flex-col gap-5">
+                    <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                        <div>
+                            <h2 className="text-2xl font-bold text-zinc-950 tracking-tight">Control fiscal</h2>
+                            <p className="text-sm text-zinc-400 mt-1">{REGIMENES[props.config.regimen]}{props.config.rfc ? ` · ${props.config.rfc}` : ''}</p>
+                        </div>
+                    </div>
+                    <div className="flex gap-1.5 bg-zinc-100 p-1 rounded-2xl overflow-x-auto no-scrollbar">
+                        {tabs.map(t => (
+                            <button key={t.id} onClick={() => setSub(t.id)}
+                                className={`flex-1 min-w-fit px-3 py-2.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap ${sub === t.id ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-500 hover:text-zinc-800'}`}>
+                                <i className={`ph ${t.icon} text-base`}></i>{t.label}
+                            </button>
+                        ))}
+                    </div>
+                    {sub === 'resumen' && <ResumenFiscal {...props} checklistDone={done} goTo={setSub} />}
+                    {sub === 'gastos' && <GastosView {...props} />}
+                    {sub === 'checklist' && <ChecklistView {...props} />}
+                    {sub === 'ajustes' && <AjustesView {...props} />}
+                    <p className="text-[11px] text-zinc-400 leading-relaxed px-1 pb-4">
+                        Las cifras son estimaciones con base en lo registrado en este dispositivo y en tasas y tarifas de la LISR/LIVA vigentes a la fecha de esta versión. No sustituyen la declaración ni la asesoría de un contador. Verifica cada enero si el SAT actualizó tarifas o reglas.
+                    </p>
+                </div>
+            );
+        }
+
+        // ---------- RESUMEN ----------
+        function calcMes(ventas, gastos, mes, config) {
+            const vm = ventas.filter(v => monthKey(v.ts) === mes);
+            const gm = gastos.filter(g => (g.fecha || '').slice(0, 7) === mes);
+            const ingresos = sum(vm, v => v.total);
+            const base = sum(vm, v => v.base);
+            const ivaTras = sum(vm, v => v.iva);
+            const conCfdi = gm.filter(g => g.cfdi);
+            const ivaAcred = sum(conCfdi, g => g.iva);
+            const deducibles = conCfdi.filter(g => !(g.metodoPago === 'efectivo' && g.total > 2000));
+            const deduccion = sum(deducibles, g => g.total - g.iva);
+            const sinFactura = vm.filter(v => !v.requiereFactura);
+            return {
+                vm, gm, ingresos, base, ivaTras, ivaAcred, deduccion,
+                ivaNeto: ivaTras - ivaAcred,
+                efectivo: sum(vm.filter(v => v.metodoPago === 'efectivo'), v => v.total),
+                banco: sum(vm.filter(v => v.metodoPago !== 'efectivo'), v => v.total),
+                globalTotal: sum(sinFactura, v => v.total), globalBase: sum(sinFactura, v => v.base), globalIva: sum(sinFactura, v => v.iva),
+                gastosTotal: sum(gm, g => g.total),
+                gastosSinCfdi: sum(gm.filter(g => !g.cfdi), g => g.total),
+                gastosEfectivoMayor: gm.filter(g => g.cfdi && g.metodoPago === 'efectivo' && g.total > 2000).length,
+            };
+        }
+
+        function calcISR(ventas, gastos, mes, config) {
+            const [y, m] = mes.split('-').map(Number);
+            const reg = config.regimen;
+            const actual = calcMes(ventas, gastos, mes, config);
+            const ytdIngresos = sum(ventas.filter(v => { const d = new Date(v.ts); return d.getFullYear() === y && d.getMonth() + 1 <= m; }), v => v.base);
+            if (reg === '612') {
+                const utilidadHasta = meses => {
+                    let u = 0;
+                    for (let i = 1; i <= meses; i++) {
+                        const k = `${y}-${String(i).padStart(2, '0')}`;
+                        const c = calcMes(ventas, gastos, k, config);
+                        u += c.base - c.deduccion;
+                    }
+                    return u;
+                };
+                const uAct = utilidadHasta(m), uPrev = m > 1 ? utilidadHasta(m - 1) : 0;
+                const isrAct = isrTarifaAcumulada(Math.max(0, uAct), m);
+                const isrPrev = m > 1 ? isrTarifaAcumulada(Math.max(0, uPrev), m - 1) : 0;
+                return { isr: Math.max(0, isrAct - isrPrev), detalle: `Utilidad acumulada ene–${MESES[m - 1].toLowerCase()}: ${money(uAct)} · tarifa acumulada art. 106 LISR menos pagos previos estimados`, ytdIngresos };
+            }
+            const tasa = resicoTasa(actual.base);
+            return { isr: actual.base * tasa / 100, tasa, detalle: `${tasa.toFixed(2)}% sobre ingresos cobrados sin IVA (${money(actual.base)})${reg === 'none' ? ' · referencia como si estuvieras en RESICO' : ''}`, ytdIngresos };
+        }
+
+        function proximosVencimientos(config, mes) {
+            const hoy = new Date();
+            const list = [];
+            const y = hoy.getFullYear(), mi = hoy.getMonth();
+            // Declaración mensual del mes en curso y, si aún no vence, la del mes anterior
+            const prev = new Date(y, mi - 1, 1);
+            const vPrev = nextBusinessDay(new Date(y, mi, 17));
+            if (daysUntil(vPrev) >= 0) list.push({ t: `Declaración mensual ISR/IVA de ${MESES[prev.getMonth()].toLowerCase()}`, d: vPrev, icon: 'ph-file-text' });
+            list.push({ t: `Declaración mensual ISR/IVA de ${MESES[mi].toLowerCase()}`, d: nextBusinessDay(new Date(y, mi + 1, 17)), icon: 'ph-file-text' });
+            // Factura global
+            if (config.periodicidadGlobal === 'bimestral') {
+                const finBim = new Date(y, mi % 2 === 0 ? mi + 2 : mi + 1, 1);
+                list.push({ t: 'Factura global del bimestre (24 h tras el cierre)', d: finBim, icon: 'ph-receipt' });
+            } else if (config.periodicidadGlobal === 'mensual') {
+                list.push({ t: `Factura global de ${MESES[mi].toLowerCase()} (24 h tras el cierre)`, d: new Date(y, mi + 1, 1), icon: 'ph-receipt' });
+            }
+            // Anual
+            const anual = new Date(mi <= 3 ? y : y + 1, 3, 30);
+            list.push({ t: `Declaración anual ${anual.getFullYear() - 1}`, d: anual, icon: 'ph-calendar-star' });
+            // e.firma
+            if (config.efirmaVence) {
+                const [ey, em, ed] = config.efirmaVence.split('-').map(Number);
+                list.push({ t: 'Vence tu e.firma (renuévala antes)', d: new Date(ey, em - 1, ed), icon: 'ph-key' });
+            }
+            return list.sort((a, b) => a.d - b.d);
+        }
+
+        function ResumenFiscal({ ventas, gastos, config, checklistDone, goTo, sync }) {
+            const [mes, setMes] = useState(monthKey(Date.now()));
+            const meses = useMemo(() => {
+                const set = new Set([monthKey(Date.now())]);
+                ventas.forEach(v => set.add(monthKey(v.ts)));
+                gastos.forEach(g => g.fecha && set.add(g.fecha.slice(0, 7)));
+                return [...set].sort().reverse();
+            }, [ventas, gastos]);
+
+            const c = calcMes(ventas, gastos, mes, config);
+            const isr = calcISR(ventas, gastos, mes, config);
+            const venc = proximosVencimientos(config, mes);
+            const pendientes = ventas.filter(v => v.requiereFactura && !v.facturada);
+            const pct = Math.round(checklistDone / CHECKLIST_TOTAL * 100);
+            const limitePct = config.regimen === '626' ? isr.ytdIngresos / RESICO_LIMITE_ANUAL * 100 : 0;
+
+            const marcarFacturada = sync.marcarFacturada;
+
+            return (
+                <div className="flex flex-col gap-5">
+                    {/* Semáforo general */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <button onClick={() => goTo('checklist')} className="text-left bg-zinc-950 text-white rounded-3xl p-5 hover:bg-zinc-900 transition-colors">
+                            <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400">Formalización</div>
+                            <div className="text-3xl font-bold mt-1">{pct}%</div>
+                            <div className="h-1.5 bg-zinc-800 rounded-full mt-3 overflow-hidden"><div className="h-full bg-emerald-400 rounded-full transition-all" style={{ width: `${pct}%` }}></div></div>
+                            <div className="text-xs text-zinc-400 mt-2">{checklistDone} de {CHECKLIST_TOTAL} requisitos · ver checklist</div>
+                        </button>
+                        <Card className="!p-5">
+                            <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400">Próximo vencimiento</div>
+                            {venc[0] && <>
+                                <div className={`text-3xl font-bold mt-1 ${daysUntil(venc[0].d) <= 3 ? 'text-red-600' : daysUntil(venc[0].d) <= 7 ? 'text-amber-600' : 'text-zinc-950'}`}>
+                                    {daysUntil(venc[0].d) === 0 ? 'Hoy' : `${daysUntil(venc[0].d)} días`}
+                                </div>
+                                <div className="text-xs text-zinc-500 mt-2 leading-snug">{venc[0].t} · {fmtDate(venc[0].d)}</div>
+                            </>}
+                        </Card>
+                        <Card className="!p-5">
+                            <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400">Facturas por emitir</div>
+                            <div className={`text-3xl font-bold mt-1 ${pendientes.length ? 'text-amber-600' : 'text-emerald-600'}`}>{pendientes.length}</div>
+                            <div className="text-xs text-zinc-500 mt-2">Ventas marcadas "requiere factura"</div>
+                        </Card>
+                    </div>
+
+                    {config.regimen === 'none' && (
+                        <div className="bg-amber-50 border border-amber-100 text-amber-800 rounded-2xl p-4 text-sm flex gap-3">
+                            <i className="ph-fill ph-warning text-xl flex-shrink-0"></i>
+                            <div>Marcaste que aún no estás inscrito. Los impuestos se muestran como referencia (RESICO). Empieza por la sección "SAT · Alta y régimen" del checklist.</div>
+                        </div>
+                    )}
+                    {limitePct >= 80 && (
+                        <div className="bg-red-50 border border-red-100 text-red-700 rounded-2xl p-4 text-sm flex gap-3">
+                            <i className="ph-fill ph-warning-octagon text-xl flex-shrink-0"></i>
+                            <div>Llevas {money(isr.ytdIngresos)} de ingresos en el año ({limitePct.toFixed(0)}% del límite de RESICO de $3.5 M). Si lo rebasas, sales del régimen: revísalo con tu contador.</div>
+                        </div>
+                    )}
+
+                    {/* Mes */}
+                    <Card>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                            <h3 className="text-lg font-bold text-zinc-950 tracking-tight">Impuestos estimados del mes</h3>
+                            <select value={mes} onChange={e => setMes(e.target.value)} className="p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-sm font-medium outline-none">
+                                {meses.map(k => <option key={k} value={k}>{monthLabel(k)}</option>)}
+                            </select>
+                        </div>
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                            <Stat label="Ventas (con IVA)" value={money(c.ingresos)} hint={`${c.vm.length} tickets`} />
+                            <Stat label="ISR estimado" value={money(isr.isr)} tone="sky" hint={config.regimen === '612' ? 'Pago provisional' : `Tasa ${isr.tasa?.toFixed(2)}%`} />
+                            <Stat label={c.ivaNeto >= 0 ? 'IVA a pagar' : 'IVA a favor'} value={money(Math.abs(c.ivaNeto))} tone={c.ivaNeto >= 0 ? 'amber' : 'green'} hint="Trasladado − acreditable" />
+                            <Stat label="Total a apartar" value={money(isr.isr + Math.max(0, c.ivaNeto))} tone="red" hint={`Vence ${fmtDate(nextBusinessDay(new Date(Number(mes.slice(0, 4)), Number(mes.slice(5)), 17)))}`} />
+                        </div>
+                        <div className="grid md:grid-cols-2 gap-6">
+                            <div>
+                                <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">IVA</h4>
+                                <Row k="Ventas sin IVA (base)" v={money(c.base)} />
+                                <Row k="IVA trasladado (cobrado)" v={money(c.ivaTras)} />
+                                <Row k="IVA acreditable (gastos con CFDI)" v={`− ${money(c.ivaAcred)}`} />
+                                <Row k={c.ivaNeto >= 0 ? 'IVA a pagar' : 'Saldo a favor'} v={money(Math.abs(c.ivaNeto))} strong />
+                            </div>
+                            <div>
+                                <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">ISR</h4>
+                                {config.regimen === '612' ? <>
+                                    <Row k="Ingresos sin IVA" v={money(c.base)} />
+                                    <Row k="Deducciones del mes (CFDI)" v={`− ${money(c.deduccion)}`} />
+                                    <Row k="Utilidad del mes" v={money(c.base - c.deduccion)} />
+                                </> : <>
+                                    <Row k="Ingresos cobrados sin IVA" v={money(c.base)} />
+                                    <Row k="Tasa RESICO aplicable" v={`${isr.tasa?.toFixed(2)}%`} />
+                                </>}
+                                <Row k="ISR estimado" v={money(isr.isr)} strong />
+                                <p className="text-[11px] text-zinc-400 mt-2 leading-relaxed">{isr.detalle}</p>
+                            </div>
+                        </div>
+                    </Card>
+
+                    <div className="grid md:grid-cols-2 gap-5">
+                        <Card>
+                            <h3 className="text-base font-bold text-zinc-950 mb-3">Factura global · {monthLabel(mes)}</h3>
+                            <p className="text-xs text-zinc-400 mb-3">Ventas al público en general sin factura individual. Emítela a RFC XAXX010101000.</p>
+                            <Row k="Subtotal" v={money(c.globalBase)} />
+                            <Row k="IVA" v={money(c.globalIva)} />
+                            <Row k="Total a facturar" v={money(c.globalTotal)} strong />
+                            <div className="mt-4 pt-3 border-t border-zinc-100">
+                                <Row k="Cobrado en efectivo" v={money(c.efectivo)} muted />
+                                <Row k="Cobrado por tarjeta/transferencia" v={money(c.banco)} muted />
+                            </div>
+                        </Card>
+                        <Card>
+                            <h3 className="text-base font-bold text-zinc-950 mb-3">Próximos vencimientos</h3>
+                            <div className="flex flex-col gap-2">
+                                {venc.map((v, i) => {
+                                    const n = daysUntil(v.d);
+                                    return (
+                                        <div key={i} className="flex items-center gap-3 p-3 rounded-2xl bg-zinc-50 border border-zinc-100">
+                                            <i className={`ph ${v.icon} text-xl text-zinc-400`}></i>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-sm font-medium text-zinc-800 truncate">{v.t}</div>
+                                                <div className="text-xs text-zinc-400">{fmtDate(v.d)}</div>
+                                            </div>
+                                            <span className={`text-xs font-bold px-2 py-1 rounded-lg ${n < 0 ? 'bg-red-100 text-red-700' : n <= 3 ? 'bg-red-50 text-red-600' : n <= 7 ? 'bg-amber-50 text-amber-600' : 'bg-white border border-zinc-200 text-zinc-500'}`}>
+                                                {n < 0 ? 'Vencido' : n === 0 ? 'Hoy' : `${n} d`}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </Card>
+                    </div>
+
+                    {pendientes.length > 0 && (
+                        <Card>
+                            <h3 className="text-base font-bold text-zinc-950 mb-3">Ventas pendientes de facturar</h3>
+                            <div className="flex flex-col gap-2">
+                                {pendientes.map(v => (
+                                    <div key={v.id} className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-amber-50/50 border border-amber-100">
+                                        <div>
+                                            <div className="text-sm font-semibold text-zinc-900">{money(v.total)} <span className="text-xs font-normal text-zinc-400 capitalize">· {v.metodoPago}</span></div>
+                                            <div className="text-xs text-zinc-400">{new Date(v.ts).toLocaleString('es-MX')} · {v.piezas} pzas</div>
+                                        </div>
+                                        <button onClick={() => marcarFacturada(v.id)} className="text-xs font-semibold bg-zinc-950 text-white px-3 py-2 rounded-xl hover:bg-zinc-800">Ya la facturé</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </Card>
+                    )}
+
+                    {(c.gastosSinCfdi > 0 || c.gastosEfectivoMayor > 0) && (
+                        <div className="bg-sky-50 border border-sky-100 text-sky-800 rounded-2xl p-4 text-sm flex flex-col gap-1">
+                            {c.gastosSinCfdi > 0 && <div><i className="ph-fill ph-info mr-1"></i>Este mes tienes {money(c.gastosSinCfdi)} en gastos sin factura: ese IVA no se puede acreditar.</div>}
+                            {c.gastosEfectivoMayor > 0 && <div><i className="ph-fill ph-info mr-1"></i>{c.gastosEfectivoMayor} gasto(s) mayores a $2,000 pagados en efectivo: no son deducibles para ISR.</div>}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ---------- GASTOS ----------
+        const CATEGORIAS = ['Mercancía para venta', 'Renta del local', 'Luz, agua, internet', 'Insumos (papel, tóner, tinta)', 'Equipo y mobiliario', 'Mantenimiento', 'Comisiones bancarias', 'Otros'];
+
+        function GastosView({ gastos, notify, sync }) {
+            const vacio = { fecha: todayISO(), proveedor: '', concepto: '', categoria: CATEGORIAS[0], total: '', tasa: '0.16', cfdi: true, metodoPago: 'transferencia' };
+            const [f, setF] = useState(vacio);
+            const [mes, setMes] = useState(monthKey(Date.now()));
+            const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
+
+            const guardar = e => {
+                e.preventDefault();
+                const total = parseFloat(f.total);
+                if (!total || total <= 0) return;
+                const tasa = parseFloat(f.tasa);
+                const iva = f.cfdi ? total - total / (1 + tasa) : 0;
+                sync.agregarGasto({ id: Date.now(), ...f, total: +total.toFixed(2), tasa, iva: +iva.toFixed(2) });
+                setF({ ...vacio, fecha: f.fecha, metodoPago: f.metodoPago });
+                notify('Gasto registrado');
+            };
+            const borrar = id => { if (confirm('¿Eliminar este gasto? También se borra del Sheet.')) sync.borrarGasto(id); };
+
+            const delMes = gastos.filter(g => (g.fecha || '').slice(0, 7) === mes).sort((a, b) => b.fecha.localeCompare(a.fecha));
+            const meses = [...new Set([monthKey(Date.now()), ...gastos.map(g => g.fecha.slice(0, 7))])].sort().reverse();
+            const totalNum = parseFloat(f.total) || 0;
+
+            return (
+                <div className="grid lg:grid-cols-5 gap-5">
+                    <Card className="lg:col-span-2 h-fit">
+                        <h3 className="text-lg font-bold text-zinc-950 tracking-tight mb-1">Registrar gasto</h3>
+                        <p className="text-xs text-zinc-400 mb-4">Compras de mercancía, renta, servicios. Sirve para IVA acreditable y, en régimen 612, para deducir ISR.</p>
+                        <form onSubmit={guardar} className="flex flex-col gap-3">
+                            <div className="grid grid-cols-2 gap-3">
+                                <input type="date" required value={f.fecha} onChange={e => set('fecha', e.target.value)} className={inputCls} />
+                                <div className="relative">
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm">$</span>
+                                    <input type="number" inputMode="decimal" step="0.01" min="0" required placeholder="Total" value={f.total} onChange={e => set('total', e.target.value)} className={inputCls + ' pl-7'} />
+                                </div>
+                            </div>
+                            <input type="text" placeholder="Proveedor (ej. Distribuidora Escolar)" value={f.proveedor} onChange={e => set('proveedor', e.target.value)} className={inputCls} />
+                            <input type="text" placeholder="Concepto (opcional)" value={f.concepto} onChange={e => set('concepto', e.target.value)} className={inputCls} />
+                            <select value={f.categoria} onChange={e => set('categoria', e.target.value)} className={inputCls}>
+                                {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
+                            </select>
+                            <div className="grid grid-cols-2 gap-3">
+                                <select value={f.tasa} onChange={e => set('tasa', e.target.value)} className={inputCls}>
+                                    <option value="0.16">IVA 16%</option>
+                                    <option value="0">IVA 0% / exento</option>
+                                </select>
+                                <select value={f.metodoPago} onChange={e => set('metodoPago', e.target.value)} className={inputCls}>
+                                    <option value="transferencia">Transferencia</option>
+                                    <option value="tarjeta">Tarjeta</option>
+                                    <option value="efectivo">Efectivo</option>
+                                </select>
+                            </div>
+                            <label className="flex items-center gap-2 text-sm text-zinc-600 cursor-pointer select-none">
+                                <input type="checkbox" checked={f.cfdi} onChange={e => set('cfdi', e.target.checked)} className="w-4 h-4 accent-zinc-950" />
+                                Tengo la factura (CFDI) a mi RFC
+                            </label>
+                            {f.cfdi && f.metodoPago === 'efectivo' && totalNum > 2000 && (
+                                <div className="text-xs bg-amber-50 border border-amber-100 text-amber-700 rounded-xl p-3">Pagado en efectivo y mayor a $2,000: no será deducible para ISR (el IVA sí cuenta si tienes CFDI).</div>
+                            )}
+                            {!f.cfdi && <div className="text-xs bg-zinc-50 border border-zinc-100 text-zinc-500 rounded-xl p-3">Sin factura se registra como gasto, pero no genera IVA acreditable ni deducción.</div>}
+                            <button type="submit" className="bg-zinc-950 text-white py-3.5 rounded-2xl font-semibold hover:bg-zinc-800 active:scale-95 transition-all text-sm mt-1">Guardar gasto</button>
+                        </form>
+                    </Card>
+
+                    <Card className="lg:col-span-3">
+                        <div className="flex items-center justify-between gap-3 mb-4">
+                            <h3 className="text-lg font-bold text-zinc-950 tracking-tight">Gastos del mes</h3>
+                            <select value={mes} onChange={e => setMes(e.target.value)} className="p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-sm font-medium outline-none">
+                                {meses.map(k => <option key={k} value={k}>{monthLabel(k)}</option>)}
+                            </select>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 mb-4">
+                            <Stat label="Total" value={money(sum(delMes, g => g.total))} />
+                            <Stat label="IVA acred." value={money(sum(delMes, g => g.iva))} tone="green" />
+                            <Stat label="Sin CFDI" value={money(sum(delMes.filter(g => !g.cfdi), g => g.total))} tone="amber" />
+                        </div>
+                        {delMes.length === 0 ? (
+                            <div className="text-center py-12 text-zinc-400 text-sm"><i className="ph-light ph-receipt text-4xl block mb-2 text-zinc-300"></i>Sin gastos registrados este mes.</div>
+                        ) : (
+                            <div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto no-scrollbar">
+                                {delMes.map(g => (
+                                    <div key={g.id} className="flex items-center gap-3 p-3 rounded-2xl bg-zinc-50 border border-zinc-100">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-sm font-medium text-zinc-900 truncate">{g.proveedor || g.categoria}{g.concepto ? ` · ${g.concepto}` : ''}</div>
+                                            <div className="text-xs text-zinc-400 flex flex-wrap gap-x-2">
+                                                <span>{g.fecha}</span><span>{g.categoria}</span><span className="capitalize">{g.metodoPago}</span>
+                                                {g.cfdi ? <span className="text-emerald-600 font-semibold">CFDI</span> : <span className="text-amber-600 font-semibold">Sin factura</span>}
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="text-sm font-semibold text-zinc-950">{money(g.total)}</div>
+                                            <div className="text-[11px] text-zinc-400">IVA {money(g.iva)}</div>
+                                        </div>
+                                        <button onClick={() => borrar(g.id)} className="text-zinc-300 hover:text-red-500 p-1"><i className="ph ph-trash text-lg"></i></button>
+                                    </div>
+                                ))}
+                            </div>
                         )}
-                    </button>
-                ))}
-            </div>
+                    </Card>
+                </div>
+            );
+        }
 
-            {showCheckout && (
-                <CheckoutModal total={total} onConfirm={handleConfirm} onCancel={() => setShowCheckout(false)} isProcessing={isProcessing}/>
-            )}
-            {lastSale && (
-                <SuccessModal sale={lastSale} onClose={() => setLastSale(null)}/>
-            )}
-        </div>
-    );
-}
+        // ---------- CHECKLIST ----------
+        function ChecklistView({ checklist, setChecklist, config }) {
+            const [open, setOpen] = useState(null);
+            const toggle = id => setChecklist(prev => ({ ...prev, [id]: !prev[id] }));
+            return (
+                <div className="flex flex-col gap-4">
+                    {CHECKLIST.map(g => {
+                        const hechos = g.items.filter(i => checklist[i.id]).length;
+                        const pct = Math.round(hechos / g.items.length * 100);
+                        return (
+                            <Card key={g.grupo} className="!p-0 overflow-hidden">
+                                <div className="flex items-center gap-3 px-5 sm:px-6 pt-5 pb-3">
+                                    <div className="w-10 h-10 rounded-xl bg-zinc-100 flex items-center justify-center"><i className={`ph ${g.icon} text-xl text-zinc-700`}></i></div>
+                                    <div className="flex-1">
+                                        <h3 className="text-base font-bold text-zinc-950">{g.grupo}</h3>
+                                        <div className="h-1.5 bg-zinc-100 rounded-full mt-2 overflow-hidden"><div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-zinc-900'}`} style={{ width: `${pct}%` }}></div></div>
+                                    </div>
+                                    <span className="text-xs font-bold text-zinc-500">{hechos}/{g.items.length}</span>
+                                </div>
+                                <div className="px-2 sm:px-3 pb-3">
+                                    {g.items.map(it => (
+                                        <div key={it.id} className="rounded-2xl hover:bg-zinc-50 transition-colors">
+                                            <div className="flex items-start gap-3 p-3">
+                                                <button onClick={() => toggle(it.id)} className={`mt-0.5 w-6 h-6 rounded-lg border-2 flex-shrink-0 flex items-center justify-center transition-all ${checklist[it.id] ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-zinc-300 bg-white'}`}>
+                                                    {checklist[it.id] && <i className="ph-bold ph-check text-sm"></i>}
+                                                </button>
+                                                <button onClick={() => setOpen(open === it.id ? null : it.id)} className="flex-1 text-left">
+                                                    <div className={`text-sm font-medium ${checklist[it.id] ? 'text-zinc-400 line-through' : 'text-zinc-900'}`}>{it.t}</div>
+                                                    {open === it.id && <div className="text-xs text-zinc-500 mt-1.5 leading-relaxed animate-fade-in-up">{it.d}</div>}
+                                                </button>
+                                                <button onClick={() => setOpen(open === it.id ? null : it.id)} className="text-zinc-300 p-0.5"><i className={`ph ph-caret-down transition-transform ${open === it.id ? 'rotate-180' : ''}`}></i></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </Card>
+                        );
+                    })}
+                </div>
+            );
+        }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+        // ---------- AJUSTES ----------
+        const Field = ({ label, children, hint }) => (
+            <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-semibold text-zinc-500">{label}</span>
+                {children}
+                {hint && <span className="text-[11px] text-zinc-400">{hint}</span>}
+            </label>
+        );
 
-</script>
+        function AjustesView({ config, setConfig, ventas, setVentas, gastos, setGastos, checklist, setChecklist, taxRates, setTaxRates, notify, sync }) {
+            const fileRef = useRef(null);
+            const set = (k, v) => setConfig(prev => ({ ...CONFIG_DEFAULT, ...prev, [k]: v }));
+
+            const exportar = () => {
+                const data = { version: 1, exportado: new Date().toISOString(), config, ventas, gastos, checklist, taxRates };
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `respaldo-papeleria-${todayISO()}.json`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+            };
+            const importar = e => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const r = new FileReader();
+                r.onload = () => {
+                    try {
+                        const d = JSON.parse(r.result);
+                        if (!confirm('Se agregarán al Sheet las ventas y gastos del respaldo que no existan, y se restaurarán régimen, checklist y tasas. ¿Continuar?')) return;
+                        const idsV = new Set(ventas.map(v => String(v.id))), idsG = new Set(gastos.map(g => String(g.id)));
+                        const nv = (d.ventas || []).filter(v => !idsV.has(String(v.id)));
+                        const ng = (d.gastos || []).filter(g => !idsG.has(String(g.id)));
+                        setVentas(prev => [...nv, ...prev].sort((a, b) => b.ts - a.ts));
+                        setGastos(prev => [...ng, ...prev]);
+                        if (d.config) setConfig(d.config);
+                        if (d.checklist) setChecklist(d.checklist);
+                        if (d.taxRates) setTaxRates(d.taxRates);
+                        if (nv.length || ng.length) sync.importar(nv, ng);
+                        notify(`Respaldo restaurado: ${nv.length} ventas y ${ng.length} gastos nuevos`);
+                    } catch { notify('Archivo de respaldo inválido'); }
+                };
+                r.readAsText(file);
+                e.target.value = '';
+            };
+
+            return (
+                <div className="grid md:grid-cols-2 gap-5">
+                    <Card>
+                        <h3 className="text-lg font-bold text-zinc-950 tracking-tight mb-4">Datos fiscales</h3>
+                        <div className="flex flex-col gap-4">
+                            <Field label="Régimen fiscal" hint="Determina cómo se estima el ISR.">
+                                <select value={config.regimen} onChange={e => set('regimen', e.target.value)} className={inputCls}>
+                                    {Object.entries(REGIMENES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                                </select>
+                            </Field>
+                            <Field label="Nombre o razón social">
+                                <input defaultValue={config.nombre} onBlur={e => set('nombre', e.target.value)} className={inputCls} />
+                            </Field>
+                            <Field label="RFC">
+                                <input defaultValue={config.rfc} onBlur={e => set('rfc', e.target.value.toUpperCase().trim())} maxLength={13} className={inputCls + ' uppercase'} />
+                            </Field>
+                            <Field label="Tasa de IVA por defecto" hint="Se aplica a productos sin tasa propia. Cambia productos individuales en Inventario.">
+                                <select value={String(config.ivaDefault)} onChange={e => set('ivaDefault', parseFloat(e.target.value))} className={inputCls}>
+                                    <option value="0.16">16% (general)</option>
+                                    <option value="0.08">8% (región fronteriza con estímulo)</option>
+                                    <option value="0">0%</option>
+                                </select>
+                            </Field>
+                            <Field label="Periodicidad de factura global">
+                                <select value={config.periodicidadGlobal} onChange={e => set('periodicidadGlobal', e.target.value)} className={inputCls}>
+                                    <option value="diaria">Diaria</option>
+                                    <option value="semanal">Semanal</option>
+                                    <option value="mensual">Mensual</option>
+                                    <option value="bimestral">Bimestral (solo RESICO PF)</option>
+                                </select>
+                            </Field>
+                            <Field label="Vencimiento de tu e.firma">
+                                <input type="date" value={config.efirmaVence} onChange={e => set('efirmaVence', e.target.value)} className={inputCls} />
+                            </Field>
+                        </div>
+                    </Card>
+
+                    <div className="flex flex-col gap-5">
+                        <Card>
+                            <h3 className="text-lg font-bold text-zinc-950 tracking-tight mb-1">Respaldo</h3>
+                            <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
+                                Ventas, gastos, régimen y checklist se guardan en tu Google Sheet (pestañas Fiscal_Ventas, Fiscal_Gastos y Fiscal_Config), así que el celular y la computadora ven lo mismo. Si no hay internet, se guardan en este dispositivo y se envían al sincronizar. El respaldo es una copia extra.
+                            </p>
+                            <div className="grid grid-cols-2 gap-3">
+                                <button onClick={exportar} className="py-3 rounded-2xl text-sm font-semibold bg-zinc-950 text-white hover:bg-zinc-800 flex items-center justify-center gap-2"><i className="ph ph-download-simple"></i>Exportar</button>
+                                <button onClick={() => fileRef.current.click()} className="py-3 rounded-2xl text-sm font-semibold bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 flex items-center justify-center gap-2"><i className="ph ph-upload-simple"></i>Restaurar</button>
+                                <input ref={fileRef} type="file" accept="application/json" onChange={importar} className="hidden" />
+                            </div>
+                            <div className="mt-4 text-xs text-zinc-400">{ventas.length} ventas · {gastos.length} gastos registrados</div>
+                        </Card>
+                        <Card>
+                            <h3 className="text-lg font-bold text-zinc-950 tracking-tight mb-2">Cómo se calcula</h3>
+                            <ul className="text-xs text-zinc-500 leading-relaxed list-disc pl-4 space-y-1.5">
+                                <li>Los precios de venta se consideran con IVA incluido: IVA = precio − precio ÷ (1 + tasa).</li>
+                                <li>RESICO (626): ISR mensual de 1% a 2.5% sobre ingresos cobrados sin IVA, sin deducciones.</li>
+                                <li>Régimen 612: ISR sobre utilidad acumulada del año con la tarifa del art. 106 LISR, menos los pagos estimados de meses anteriores.</li>
+                                <li>IVA acreditable solo de gastos con CFDI a tu RFC.</li>
+                                <li>Solo cuentan las ventas registradas con esta versión de la app (año actual y anterior).</li>
+                            </ul>
+                        </Card>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>
