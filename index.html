@@ -63,7 +63,7 @@
             useEffect(() => { store.set(key, v); }, [key, v]);
             return [v, setV];
         }
-        const money = n => '$' + Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const money = n => { const x = Number(n || 0); return (x < -0.004 ? '-$' : '$') + Math.abs(x).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
         const sum = (arr, f) => arr.reduce((s, x) => s + (Number(f(x)) || 0), 0);
         const monthKey = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
         const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -102,7 +102,7 @@
             return row[1] * f + (base - row[0] * f) * row[2] / 100;
         };
 
-        const CONFIG_DEFAULT = { regimen: '626', ivaDefault: 0.16, rfc: '', nombre: '', efirmaVence: '', periodicidadGlobal: 'mensual' };
+        const CONFIG_DEFAULT = { regimen: '626', ivaDefault: 0.16, rfc: '', nombre: '', efirmaVence: '', periodicidadGlobal: 'mensual', comprasConFactura: false };
 
         // =====================================================================
         //  CHECKLIST DE FORMALIZACIÓN (persona física con papelería)
@@ -245,6 +245,7 @@
                         })));
                     } else { showNotification("Base de datos vacía."); setInventory([]); }
                     if (data.missingItems) setMissingItems(data.missingItems);
+                    if (data.historialImportado > 0) showNotification(`${data.historialImportado} ventas del Historial agregadas al control fiscal`);
 
                     // El Sheet manda, salvo que haya envíos pendientes (para no perder lo local)
                     if (data.fiscal && sinPendientes) {
@@ -402,7 +403,7 @@
                         ) : (
                             <div className="flex-1 overflow-y-auto pb-24 md:pb-0 p-4 md:p-8 no-scrollbar w-full max-w-7xl mx-auto">
                                 {activeTab === 'pos' && <div className="animate-fade-in-up h-full"><POSView inventory={inventory} cart={cart} addToCart={addToCart} setCart={setCart} checkout={checkout} /></div>}
-                                {activeTab === 'inventory' && <div className="animate-fade-in-up h-full"><InventoryView inventory={inventory} rateFor={rateFor} setTaxRates={setTaxRates} /></div>}
+                                {activeTab === 'inventory' && <div className="animate-fade-in-up h-full"><InventoryView inventory={inventory} rateFor={rateFor} setTaxRates={setTaxRates} config={cfg} setConfig={setConfig} ventas={ventas} gastos={gastos} /></div>}
                                 {activeTab === 'missing' && <div className="animate-fade-in-up h-full"><MissingView missingItems={missingItems} newMissing={newMissing} setNewMissing={setNewMissing} handleAddMissing={handleAddMissing} /></div>}
                                 {activeTab === 'fiscal' && <div className="animate-fade-in-up"><FiscalView ventas={ventas} setVentas={setVentas} gastos={gastos} setGastos={setGastos} checklist={checklist} setChecklist={setChecklist} config={cfg} setConfig={setConfig} taxRates={taxRates} setTaxRates={setTaxRates} notify={showNotification} sync={sync} /></div>}
                             </div>
@@ -645,57 +646,114 @@
         // =====================================================================
         //  INVENTARIO (con tasa de IVA por producto)
         // =====================================================================
-        function InventoryView({ inventory, rateFor, setTaxRates }) {
+        // Tasa de ISR que se usa para estimar por artículo
+        function tasaIsrActual(ventas, gastos, config) {
+            const mes = monthKey(Date.now());
+            const c = calcMes(ventas, gastos, mes, config);
+            if (config.regimen === '612') {
+                const isr = calcISR(ventas, gastos, mes, config).isr;
+                const util = c.base - c.deduccion;
+                return { tasa: util > 0 ? isr / util : 0, sobre: 'utilidad', texto: util > 0 ? `${(isr / util * 100).toFixed(2)}% efectivo sobre la utilidad (estimado del mes)` : 'sin utilidad registrada este mes' };
+            }
+            const t = resicoTasa(c.base) / 100;
+            return { tasa: t, sobre: 'venta', texto: `${(t * 100).toFixed(2)}% RESICO sobre el precio sin IVA (según tus ventas del mes)` };
+        }
+
+        // Desglose de un precio: cuánto es IVA, cuánto ISR y cuánto te queda
+        function desglosar(item, rate, isr, comprasConFactura) {
+            const precio = Number(item.price) || 0, costo = Number(item.unitCost) || 0;
+            const base = precio / (1 + rate);
+            const ivaVenta = precio - base;
+            const ivaCompra = comprasConFactura ? costo - costo / (1 + rate) : 0;
+            const ivaNeto = ivaVenta - ivaCompra;
+            const isrMonto = isr.sobre === 'venta' ? base * isr.tasa : Math.max(0, base - (costo - ivaCompra)) * isr.tasa;
+            const teQueda = precio - costo - ivaNeto - isrMonto;
+            return { base, ivaVenta, ivaNeto, isr: isrMonto, teQueda, pct: precio ? teQueda / precio * 100 : 0 };
+        }
+
+        function InventoryView({ inventory, rateFor, setTaxRates, config, setConfig, ventas, gastos }) {
             const safeInventory = Array.isArray(inventory) ? inventory : [];
+            const [busca, setBusca] = useState('');
             const toggleRate = id => {
                 const next = rateFor(id) > 0 ? 0 : 0.16;
                 setTaxRates(prev => ({ ...prev, [id]: next }));
             };
+            const isr = useMemo(() => tasaIsrActual(ventas, gastos, config), [ventas, gastos, config]);
+            const conFactura = !!config.comprasConFactura;
+            const ejemplo = desglosar({ price: 100, unitCost: 0 }, config.ivaDefault, isr, false);
+            const lista = safeInventory.filter(i => !busca || String(i.name).toLowerCase().includes(busca.toLowerCase()));
+            const th = "py-3 px-4";
 
             return (
-                <div className="flex-1 bg-white rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-zinc-200 flex flex-col h-[calc(100vh-7rem)] md:h-[calc(100vh-4rem)] overflow-hidden max-w-6xl mx-auto w-full">
-                    <div className="p-6 md:p-8 border-b border-zinc-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                        <div>
-                            <h2 className="text-xl font-bold text-zinc-950 tracking-tight">Inventario Global</h2>
-                            <p className="text-sm text-zinc-400 mt-1">Sincronizado con Google Sheets · toca la tasa de IVA para cambiarla (libros y revistas: 0%)</p>
+                <div className="flex-1 bg-white rounded-3xl shadow-[0_4px_20px_rgba(0,0,0,0.03)] border border-zinc-200 flex flex-col h-[calc(100vh-7rem)] md:h-[calc(100vh-4rem)] overflow-hidden max-w-7xl mx-auto w-full">
+                    <div className="p-5 md:p-6 border-b border-zinc-100 flex flex-col gap-4">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                            <div>
+                                <h2 className="text-xl font-bold text-zinc-950 tracking-tight">Inventario e impuestos por artículo</h2>
+                                <p className="text-sm text-zinc-400 mt-1">De cada precio: cuánto es IVA, cuánto ISR y cuánto te queda después de pagar el producto. Toca la tasa de IVA para cambiarla (libros y revistas: 0%).</p>
+                            </div>
+                            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar artículo..." className="w-full sm:w-56 p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-sm outline-none focus:border-zinc-950" />
                         </div>
-                        <span className="text-xs font-semibold tracking-widest uppercase bg-zinc-100 text-zinc-500 px-3 py-1.5 rounded-lg">Solo lectura</span>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 text-xs">
+                            <div className="bg-zinc-50 border border-zinc-100 rounded-2xl p-3">
+                                <div className="font-semibold text-zinc-700">Por cada $100 que vendes ({Math.round(config.ivaDefault * 100)}% IVA)</div>
+                                <div className="text-zinc-500 mt-1">IVA {money(ejemplo.ivaVenta)} · ISR {isr.sobre === 'venta' ? money(ejemplo.isr) : 'según utilidad'} · sin contar el costo del producto</div>
+                            </div>
+                            <div className="bg-zinc-50 border border-zinc-100 rounded-2xl p-3">
+                                <div className="font-semibold text-zinc-700">ISR usado</div>
+                                <div className="text-zinc-500 mt-1">{isr.texto}</div>
+                            </div>
+                            <label className="bg-zinc-50 border border-zinc-100 rounded-2xl p-3 flex items-center gap-3 cursor-pointer select-none">
+                                <input type="checkbox" checked={conFactura} onChange={e => setConfig(prev => ({ ...CONFIG_DEFAULT, ...prev, comprasConFactura: e.target.checked }))} className="w-4 h-4 accent-zinc-950" />
+                                <span><span className="font-semibold text-zinc-700">Compro mi mercancía con factura</span><span className="block text-zinc-500 mt-0.5">Si sí, el IVA de tu compra se resta del IVA que pagas.</span></span>
+                            </label>
+                        </div>
                     </div>
                     <div className="overflow-x-auto flex-1 no-scrollbar">
                         <table className="w-full text-left border-collapse whitespace-nowrap">
-                            <thead className="bg-zinc-50/50 text-zinc-500 text-xs uppercase tracking-wider font-semibold border-b border-zinc-200">
+                            <thead className="bg-zinc-50/80 text-zinc-500 text-[11px] uppercase tracking-wider font-semibold border-b border-zinc-200 sticky top-0">
                                 <tr>
-                                    <th className="py-4 px-6">Artículo</th>
-                                    <th className="py-4 px-6 text-right">Costo</th>
-                                    <th className="py-4 px-6 text-center">Margen</th>
-                                    <th className="py-4 px-6 text-right">Precio</th>
-                                    <th className="py-4 px-6 text-center">IVA</th>
-                                    <th className="py-4 px-6 text-right">Stock</th>
-                                    <th className="py-4 px-6 text-center">Estado</th>
+                                    <th className={th}>Artículo</th>
+                                    <th className={th + " text-right"}>Costo</th>
+                                    <th className={th + " text-right"}>Precio</th>
+                                    <th className={th + " text-center"}>Tasa IVA</th>
+                                    <th className={th + " text-right"}>Sin IVA</th>
+                                    <th className={th + " text-right"}>IVA a pagar</th>
+                                    <th className={th + " text-right"}>ISR</th>
+                                    <th className={th + " text-right"}>Te queda</th>
+                                    <th className={th + " text-right"}>Stock</th>
+                                    <th className={th + " text-center"}>Estado</th>
                                 </tr>
                             </thead>
                             <tbody className="text-sm">
-                                {safeInventory.length === 0 ? (
-                                    <tr><td colSpan="7" className="text-center py-16 text-zinc-400 font-medium">No hay productos sincronizados.</td></tr>
+                                {lista.length === 0 ? (
+                                    <tr><td colSpan="10" className="text-center py-16 text-zinc-400 font-medium">No hay productos sincronizados.</td></tr>
                                 ) : (
-                                    safeInventory.map(item => {
+                                    lista.map(item => {
                                         const isService = item.stock > 900000;
                                         const isOut = !isService && item.stock <= 0;
                                         const isLowStock = !isService && item.stock <= (item.minStock || 2) && !isOut;
                                         const rate = rateFor(item.id);
+                                        const d = desglosar(item, rate, isr, conFactura);
+                                        const td = "py-3 px-4";
                                         return (
                                             <tr key={item.id} className="border-b border-zinc-50 hover:bg-zinc-50/50 transition-colors">
-                                                <td className="py-4 px-6 font-medium text-zinc-900">{item.name}</td>
-                                                <td className="py-4 px-6 text-right text-zinc-500">{money(item.unitCost)}</td>
-                                                <td className="py-4 px-6 text-center text-zinc-400">{item.margin || 0}%</td>
-                                                <td className="py-4 px-6 text-right font-semibold text-zinc-900">{money(item.price)}</td>
-                                                <td className="py-4 px-6 text-center">
+                                                <td className={td + " font-medium text-zinc-900 max-w-[220px] truncate"} title={item.name}>{item.name}</td>
+                                                <td className={td + " text-right text-zinc-500"}>{money(item.unitCost)}</td>
+                                                <td className={td + " text-right font-semibold text-zinc-900"}>{money(item.price)}</td>
+                                                <td className={td + " text-center"}>
                                                     <button onClick={() => toggleRate(item.id)} className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors ${rate > 0 ? 'bg-white border-zinc-200 text-zinc-700 hover:border-zinc-400' : 'bg-sky-50 border-sky-100 text-sky-700 hover:border-sky-300'}`}>
                                                         {Math.round(rate * 100)}%
                                                     </button>
                                                 </td>
-                                                <td className="py-4 px-6 text-right font-medium text-zinc-600">{isService ? '∞' : item.stock}</td>
-                                                <td className="py-4 px-6 text-center">
+                                                <td className={td + " text-right text-zinc-500"}>{money(d.base)}</td>
+                                                <td className={td + " text-right text-amber-600"}>{money(d.ivaNeto)}</td>
+                                                <td className={td + " text-right text-sky-700"}>{money(d.isr)}</td>
+                                                <td className={td + ` text-right font-semibold ${d.teQueda < 0 ? 'text-red-600' : 'text-emerald-600'}`} title={`${d.pct.toFixed(0)}% del precio`}>
+                                                    {money(d.teQueda)}<span className="block text-[10px] font-normal text-zinc-400">{d.pct.toFixed(0)}% del precio</span>
+                                                </td>
+                                                <td className={td + " text-right font-medium text-zinc-600"}>{isService ? '∞' : item.stock}</td>
+                                                <td className={td + " text-center"}>
                                                     {isService ? <span className="px-2.5 py-1 bg-zinc-100 text-zinc-600 rounded-md text-[10px] uppercase font-bold tracking-wider">Servicio</span>
                                                     : isOut ? <span className="px-2.5 py-1 bg-red-50 text-red-600 border border-red-100 rounded-md text-[10px] uppercase font-bold tracking-wider">Agotado</span>
                                                     : isLowStock ? <span className="px-2.5 py-1 bg-amber-50 text-amber-600 border border-amber-100 rounded-md text-[10px] uppercase font-bold tracking-wider">Bajo</span>
@@ -829,7 +887,9 @@
                 vm, gm, ingresos, base, ivaTras, ivaAcred, deduccion,
                 ivaNeto: ivaTras - ivaAcred,
                 efectivo: sum(vm.filter(v => v.metodoPago === 'efectivo'), v => v.total),
-                banco: sum(vm.filter(v => v.metodoPago !== 'efectivo'), v => v.total),
+                banco: sum(vm.filter(v => v.metodoPago === 'tarjeta' || v.metodoPago === 'transferencia'), v => v.total),
+                sinMetodo: sum(vm.filter(v => !['efectivo', 'tarjeta', 'transferencia'].includes(v.metodoPago)), v => v.total),
+                deHistorial: vm.filter(v => v.origen === 'historial').length,
                 globalTotal: sum(sinFactura, v => v.total), globalBase: sum(sinFactura, v => v.base), globalIva: sum(sinFactura, v => v.iva),
                 gastosTotal: sum(gm, g => g.total),
                 gastosSinCfdi: sum(gm.filter(g => !g.cfdi), g => g.total),
@@ -981,7 +1041,16 @@
                                 <p className="text-[11px] text-zinc-400 mt-2 leading-relaxed">{isr.detalle}</p>
                             </div>
                         </div>
+                        {c.deHistorial > 0 && (
+                            <p className="text-[11px] text-zinc-400 mt-4 pt-3 border-t border-zinc-100 leading-relaxed">
+                                <i className="ph ph-clock-counter-clockwise mr-1"></i>
+                                Incluye {c.deHistorial} ticket(s) tomados de la hoja Historial. El IVA se calculó con la tasa de cada producto (16% si no tiene una propia) suponiendo que los precios ya lo incluían.
+                            </p>
+                        )}
                     </Card>
+
+                    <PeriodosCard ventas={ventas} gastos={gastos} config={config} mesActivo={mes} setMes={setMes} />
+
 
                     <div className="grid md:grid-cols-2 gap-5">
                         <Card>
@@ -993,6 +1062,7 @@
                             <div className="mt-4 pt-3 border-t border-zinc-100">
                                 <Row k="Cobrado en efectivo" v={money(c.efectivo)} muted />
                                 <Row k="Cobrado por tarjeta/transferencia" v={money(c.banco)} muted />
+                                {c.sinMetodo > 0 && <Row k="Sin método registrado (historial)" v={money(c.sinMetodo)} muted />}
                             </div>
                         </Card>
                         <Card>
@@ -1041,6 +1111,99 @@
                         </div>
                     )}
                 </div>
+            );
+        }
+
+        // ---------- RESUMEN POR PERIODO ----------
+        function PeriodosCard({ ventas, gastos, config, mesActivo, setMes }) {
+            const anios = useMemo(() => {
+                const s = new Set([String(new Date().getFullYear())]);
+                ventas.forEach(v => s.add(String(new Date(v.ts).getFullYear())));
+                return [...s].sort().reverse();
+            }, [ventas]);
+            const [anio, setAnio] = useState(mesActivo.slice(0, 4));
+
+            const filas = useMemo(() => {
+                const hoy = monthKey(Date.now());
+                const out = [];
+                for (let m = 1; m <= 12; m++) {
+                    const k = `${anio}-${String(m).padStart(2, '0')}`;
+                    if (k > hoy) break;
+                    const c = calcMes(ventas, gastos, k, config);
+                    if (!c.vm.length && !c.gm.length) continue;
+                    const isr = calcISR(ventas, gastos, k, config);
+                    out.push({
+                        k, tickets: c.vm.length, ventas: c.ingresos, ivaTras: c.ivaTras, ivaAcred: c.ivaAcred,
+                        ivaNeto: c.ivaNeto, isr: isr.isr, pagar: isr.isr + Math.max(0, c.ivaNeto),
+                        vence: nextBusinessDay(new Date(Number(anio), m, 17)), enCurso: k === hoy
+                    });
+                }
+                return out;
+            }, [ventas, gastos, config, anio]);
+
+            const tot = {
+                ventas: sum(filas, f => f.ventas), ivaNeto: sum(filas, f => Math.max(0, f.ivaNeto)),
+                isr: sum(filas, f => f.isr), pagar: sum(filas, f => f.pagar)
+            };
+
+            return (
+                <Card>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-1">
+                        <h3 className="text-lg font-bold text-zinc-950 tracking-tight">Impuestos por periodo</h3>
+                        <select value={anio} onChange={e => setAnio(e.target.value)} className="p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-sm font-medium outline-none">
+                            {anios.map(a => <option key={a} value={a}>{a}</option>)}
+                        </select>
+                    </div>
+                    <p className="text-xs text-zinc-400 mb-4">Lo que correspondería declarar cada mes con tus ventas registradas. Toca un mes para ver su detalle arriba.</p>
+                    {filas.length === 0 ? (
+                        <div className="text-center py-10 text-zinc-400 text-sm">Sin ventas registradas en {anio}.</div>
+                    ) : (
+                        <div className="overflow-x-auto no-scrollbar -mx-2">
+                            <table className="w-full text-sm whitespace-nowrap">
+                                <thead className="text-[11px] uppercase tracking-wider text-zinc-400 font-semibold">
+                                    <tr className="border-b border-zinc-100">
+                                        <th className="text-left py-2 px-2">Mes</th>
+                                        <th className="text-right py-2 px-2">Ventas</th>
+                                        <th className="text-right py-2 px-2">IVA neto</th>
+                                        <th className="text-right py-2 px-2">ISR</th>
+                                        <th className="text-right py-2 px-2">A pagar</th>
+                                        <th className="text-right py-2 px-2">Vence</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filas.map(f => (
+                                        <tr key={f.k} onClick={() => setMes(f.k)}
+                                            className={`border-b border-zinc-50 cursor-pointer transition-colors ${f.k === mesActivo ? 'bg-zinc-100' : 'hover:bg-zinc-50'}`}>
+                                            <td className="py-2.5 px-2 font-medium text-zinc-900">
+                                                {MESES[Number(f.k.slice(5)) - 1]}
+                                                {f.enCurso && <span className="ml-2 text-[10px] font-bold uppercase text-sky-600">en curso</span>}
+                                                <div className="text-[11px] text-zinc-400 font-normal">{f.tickets} tickets</div>
+                                            </td>
+                                            <td className="py-2.5 px-2 text-right text-zinc-700">{money(f.ventas)}</td>
+                                            <td className={`py-2.5 px-2 text-right ${f.ivaNeto < 0 ? 'text-emerald-600' : 'text-zinc-700'}`}>{f.ivaNeto < 0 ? `a favor ${money(-f.ivaNeto)}` : money(f.ivaNeto)}</td>
+                                            <td className="py-2.5 px-2 text-right text-zinc-700">{money(f.isr)}</td>
+                                            <td className="py-2.5 px-2 text-right font-semibold text-zinc-950">{money(f.pagar)}</td>
+                                            <td className="py-2.5 px-2 text-right text-xs text-zinc-400">{fmtDate(f.vence)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                                <tfoot>
+                                    <tr className="font-semibold text-zinc-950">
+                                        <td className="py-3 px-2">Total {anio}</td>
+                                        <td className="py-3 px-2 text-right">{money(tot.ventas)}</td>
+                                        <td className="py-3 px-2 text-right">{money(tot.ivaNeto)}</td>
+                                        <td className="py-3 px-2 text-right">{money(tot.isr)}</td>
+                                        <td className="py-3 px-2 text-right text-red-600">{money(tot.pagar)}</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    )}
+                    <p className="text-[11px] text-zinc-400 mt-3 leading-relaxed">
+                        El saldo de IVA a favor de un mes no se resta aquí de los siguientes; tu contador puede acreditarlo o pedir su devolución. Si aún no estás inscrito en el SAT, estas cifras son una referencia de lo que pagarías; si los meses pasados se tendrían que declarar depende de la fecha de inicio de operaciones que registres, así que revísalo con tu contador.
+                    </p>
+                </Card>
             );
         }
 
